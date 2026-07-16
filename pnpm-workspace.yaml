@@ -1,0 +1,3 @@
+# sharp не нужен (images.unoptimized в static export) — его postinstall осознанно не запускаем
+allowBuilds:
+  sharp: false

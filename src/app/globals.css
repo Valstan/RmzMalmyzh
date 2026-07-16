@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+/* Дизайн-токены сняты с rmz43.ru (тема The7):
+   акцент #e31e24, фон #f7f7f7, текст #000/16px, Open Sans / Noto Sans */
+:root {
+  --accent: #e31e24;
+  --accent-dark: #b5181d;
+  --bg: #f7f7f7;
+  --ink: #000000;
+  --muted: #555555;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Open Sans", "Segoe UI", Helvetica, Arial, Verdana, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+h1, h2, h3, h4 {
+  font-family: "Noto Sans", "Segoe UI", Helvetica, Arial, Verdana, sans-serif;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+/* --- Контентная типографика (harvested HTML) --- */
+.prose-rmz h1 { font-size: 42px; color: var(--accent); margin: 0.4em 0; }
+.prose-rmz h2 { font-size: 30px; margin: 1em 0 0.5em; }
+.prose-rmz h3 { font-size: 22px; margin: 1em 0 0.5em; }
+.prose-rmz h4 { font-size: 18px; margin: 1em 0 0.5em; }
+.prose-rmz p { margin: 0.7em 0; }
+.prose-rmz ul, .prose-rmz ol { margin: 0.7em 0 0.7em 1.4em; list-style: disc; }
+.prose-rmz ol { list-style: decimal; }
+.prose-rmz a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.prose-rmz a.btn { text-decoration: none; }
+.prose-rmz img { max-width: 100%; height: auto; border-radius: 4px; margin: 0.5em auto; }
+.prose-rmz table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 15px; }
+.prose-rmz th, .prose-rmz td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; }
+.prose-rmz th { background: #eee; }
+.prose-rmz blockquote { border-left: 4px solid var(--accent); padding-left: 1em; color: var(--muted); margin: 1em 0; }
+
+/* --- WPBakery-сетка из харвеста: row/col --- */
+.prose-rmz .row { display: flex; flex-wrap: wrap; gap: 0 24px; align-items: flex-start; }
+.prose-rmz .col { min-width: 0; }
+.prose-rmz .col-12 { flex: 1 1 100%; }
+.prose-rmz .col-9 { flex: 1 1 calc(75% - 24px); }
+.prose-rmz .col-8 { flex: 1 1 calc(66% - 24px); }
+.prose-rmz .col-6 { flex: 1 1 calc(50% - 24px); }
+.prose-rmz .col-4 { flex: 1 1 calc(33.333% - 24px); }
+.prose-rmz .col-3 { flex: 1 1 calc(25% - 24px); }
+.prose-rmz .col-2 { flex: 1 1 calc(16.666% - 24px); }
+@media (max-width: 760px) {
+  .prose-rmz .col-9, .prose-rmz .col-8, .prose-rmz .col-6,
+  .prose-rmz .col-4, .prose-rmz .col-3, .prose-rmz .col-2 { flex-basis: 100%; }
+  .prose-rmz h1 { font-size: 30px; }
+  .prose-rmz h2 { font-size: 24px; }
+}
+
+/* --- Кнопки в стиле The7 --- */
+.btn, .rmz-form button {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff !important;
+  padding: 10px 26px;
+  border-radius: 3px;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  transition: background 0.15s;
+  border: 0;
+  cursor: pointer;
+}
+.btn:hover, .rmz-form button:hover { background: var(--accent-dark); }
+
+/* --- Форма --- */
+.rmz-form input, .rmz-form textarea {
+  width: 100%;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  background: #fff;
+  padding: 9px 12px;
+  margin-bottom: 12px;
+  font: inherit;
+}
+.rmz-form input:focus, .rmz-form textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}

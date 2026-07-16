@@ -1,0 +1,16 @@
+# deps / build
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# env / secrets (#008 — секреты вне репо)
+.env*
+
+# локальный харвест-сырец (зеркало rmz43.ru не коммитим — только parsed content/)
+mirror/
+
+# OS
+Thumbs.db
+.DS_Store
