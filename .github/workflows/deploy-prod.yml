@@ -1,0 +1,144 @@
+name: Deploy to production
+
+# Статический экспорт собирается в CI (G20: на боксе не собираем) и льётся на
+# Бокс Сабантуя. nginx отдаёт /home/valstan/rmz/current — Node-процесса нет,
+# RAM-нагрузка ≈ 0 рядом с жильцами Sabantuy/Kazanskaya.
+# Харвест deploy-prod.yml KazanskayaMalmyzh (ADR-0007), упрощён под статику.
+#
+# Требуется:
+#   secrets.SSH_PRIVATE_KEY   — изолированный ключ id_ed25519_rmz_deploy (#001)
+#   vars.DEPLOY_SSH_HOST/PORT — Бокс Сабантуя (myjino ротирует hex-хост — потому в vars)
+#   vars.NEXT_PUBLIC_SITE_URL — боевой домен, строго punycode (G133/G134):
+#                               https://xn--g1ajl.xn--80adkdyec4j.xn--p1ai
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.claude/**'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Картинки с rmz43.ru: кэшируются по манифесту, скрипт докачивает недостающее
+      - uses: actions/cache@v4
+        with:
+          path: public/images/wp
+          key: wp-images-${{ hashFiles('content/images-manifest.json') }}
+
+      - run: pnpm fetch-images
+
+      - name: Build static export
+        env:
+          NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+        run: pnpm build
+
+      - name: Pack
+        run: tar czf rmz-site.tgz -C out .
+
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+        run: |
+          set -e
+          if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$DEPLOY_SSH_HOST" ] || [ -z "$DEPLOY_SSH_PORT" ]; then
+            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / vars.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519_rmz
+          chmod 600 ~/.ssh/id_ed25519_rmz
+          ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat > ~/.ssh/config <<CFG
+          Host rmz
+            HostName $DEPLOY_SSH_HOST
+            Port $DEPLOY_SSH_PORT
+            User valstan
+            IdentityFile ~/.ssh/id_ed25519_rmz
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+          CFG
+          chmod 600 ~/.ssh/config
+
+      - name: Ship + activate release
+        run: |
+          set -e
+          scp -q rmz-site.tgz rmz:/tmp/rmz-site.tgz
+          ssh rmz 'bash -s' "${{ github.sha }}" <<'REMOTE'
+          set -e
+          SHA="$1"
+          BASE=/home/valstan/rmz
+          REL="$BASE/releases/$SHA"
+          rm -rf "$REL"; mkdir -p "$REL"
+          tar xzf /tmp/rmz-site.tgz -C "$REL"
+          rm -f /tmp/rmz-site.tgz
+          # nginx (www-data) должен читать статику из-под /home/valstan
+          chmod o+x /home/valstan "$BASE" "$BASE/releases"
+          chmod -R o+rX "$REL"
+          ln -sfn "$REL" "$BASE/current"
+          # держим последние 3 релиза
+          ls -1dt "$BASE"/releases/*/ 2>/dev/null | tail -n +4 | xargs -r rm -rf
+          echo "shipped $SHA"
+          REMOTE
+
+      - name: Install/refresh nginx vhost (idempotent)
+        run: |
+          set -e
+          scp -q deploy/nginx-rmz.conf rmz:/tmp/nginx-rmz.conf
+          ssh rmz 'bash -s' <<'REMOTE'
+          set -e
+          if sudo cmp -s /tmp/nginx-rmz.conf /etc/nginx/sites-available/rmz.conf 2>/dev/null; then
+            echo "vhost без изменений"
+          else
+            sudo cp /tmp/nginx-rmz.conf /etc/nginx/sites-available/rmz.conf
+            sudo ln -sfn /etc/nginx/sites-available/rmz.conf /etc/nginx/sites-enabled/rmz.conf
+            sudo nginx -t
+            sudo systemctl reload nginx
+            echo "vhost обновлён, nginx перечитан"
+          fi
+          rm -f /tmp/nginx-rmz.conf
+          REMOTE
+
+      # #011 content-smoke: 200 + контент-маркер, с XFP=https чтобы не поймать редирект
+      - name: Smoke check
+        run: |
+          set -e
+          ssh rmz 'bash -s' <<'REMOTE'
+          set -e
+          H="Host: xn--g1ajl.xn--80adkdyec4j.xn--p1ai"
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "$H" -H "X-Forwarded-Proto: https" http://127.0.0.1/)
+          echo "local / → $code"
+          [ "$code" = "200" ] || { echo "::error::ожидался 200"; exit 1; }
+          if curl -s --max-time 15 -H "$H" -H "X-Forwarded-Proto: https" http://127.0.0.1/ | grep -q "Малмыжский"; then
+            echo "content marker OK: «Малмыжский» на главной"
+          else
+            echo "::error::контент-маркер не найден"; exit 1
+          fi
+          redirect=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "$H" -H "X-Forwarded-Proto: http" http://127.0.0.1/)
+          echo "XFP=http / → $redirect (ожидается 301)"
+          REMOTE

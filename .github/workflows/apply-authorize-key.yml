@@ -1,0 +1,47 @@
+name: Authorize deploy key (bootstrap, manual)
+
+# Одноразовый bootstrap (#001): добавляет публичную часть изолированного ключа
+# RmzMalmyzh в authorized_keys Бокса Сабантуя, заходя временным
+# secrets.SSH_BOOTSTRAP_KEY (сабантуевский деплой-ключ).
+# После успешного прогона секрет SSH_BOOTSTRAP_KEY удаляется — дальше все
+# воркфлоу ходят только своим ключом (secrets.SSH_PRIVATE_KEY).
+# NEW_PUBKEY ниже — публичная часть, в открытом виде безопасна.
+
+on:
+  workflow_dispatch:
+
+env:
+  NEW_PUBKEY: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJecbfgDsJEUowOVTTie2BVbrChno78ZMEh7HP2I7CjU rmz-deploy-isolated-001"
+
+jobs:
+  authorize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Append pubkey to authorized_keys (idempotent)
+        env:
+          SSH_BOOTSTRAP_KEY: ${{ secrets.SSH_BOOTSTRAP_KEY }}
+          HOST: ${{ vars.DEPLOY_SSH_HOST }}
+          PORT: ${{ vars.DEPLOY_SSH_PORT }}
+        run: |
+          set -e
+          if [ -z "$SSH_BOOTSTRAP_KEY" ] || [ -z "$HOST" ] || [ -z "$PORT" ]; then
+            echo "::error::Нужны secrets.SSH_BOOTSTRAP_KEY + vars.DEPLOY_SSH_HOST/PORT"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_BOOTSTRAP_KEY" > ~/.ssh/bootstrap
+          chmod 600 ~/.ssh/bootstrap
+          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh -i ~/.ssh/bootstrap -o IdentitiesOnly=yes -p "$PORT" valstan@"$HOST" 'bash -s' <<REMOTE
+          set -e
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+          if grep -qF "$NEW_PUBKEY" ~/.ssh/authorized_keys; then
+            echo "pubkey уже в authorized_keys"
+          else
+            echo "$NEW_PUBKEY" >> ~/.ssh/authorized_keys
+            echo "pubkey добавлен"
+          fi
+          echo "итого ключей: \$(grep -c '^ssh-' ~/.ssh/authorized_keys)"
+          REMOTE
