@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import Image from "next/image";
-import { posts } from "@/lib/content";
+import { getPosts } from "@/lib/cms";
+
+export const revalidate = 3600;
 
 export const metadata: Metadata = {
   title: "Новости",
@@ -15,26 +17,27 @@ function excerpt(html: string, n = 220) {
   return text.length > n ? text.slice(0, n).replace(/\S+$/, "") + "…" : text;
 }
 
-export default function NewsPage() {
+export default async function NewsPage() {
+  const posts = await getPosts();
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
       <h1 className="text-4xl font-bold text-[var(--accent)] mb-8">Новости</h1>
       <div className="space-y-8">
         {posts.map((p) => (
-          <article key={p.slug} className="bg-white rounded shadow-sm p-6 flex gap-5">
+          <article key={p.path} className="bg-white rounded shadow-sm p-6 flex gap-5">
             {p.ogImage && (
-              <Link href={p.slug} className="hidden sm:block shrink-0">
+              <Link href={p.path} className="hidden sm:block shrink-0">
                 <Image src={p.ogImage} alt="" width={160} height={120} className="rounded object-cover w-40 h-28" />
               </Link>
             )}
             <div>
               <p className="text-sm text-neutral-500">
-                {new Date(p.published!).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}
+                {new Date(p.publishedAt!).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}
               </p>
               <h2 className="text-xl font-bold my-1">
-                <Link href={p.slug} className="hover:text-[var(--accent)]">{p.h1}</Link>
+                <Link href={p.path} className="hover:text-[var(--accent)]">{p.h1}</Link>
               </h2>
-              <p className="text-sm text-neutral-700">{excerpt(p.html)}</p>
+              <p className="text-sm text-neutral-700">{excerpt(p.html ?? "")}</p>
             </div>
           </article>
         ))}
