@@ -1,0 +1,185 @@
+name: Setup prod stage 2 (manual, idempotent)
+
+# Одноразовая (и безопасно повторяемая) подготовка Бокса Сабантуя к стадии 2:
+#   1. В CI: схема Payload + сид контента стадии 1 + админ → pg_dump.
+#   2. На боксе: роль rmz_app + БД rmz (пароль генерится НА боксе, живёт только
+#      в /etc/rmz/rmz.env), /etc/rmz/rmz.env, systemd-юнит rmz, каталоги.
+#   3. Restore дампа в БД бокса (только если БД пустая; force_restore=true — пересоздать).
+# После зелёного прогона — штатный деплой: gh workflow run deploy-prod.yml.
+#
+# Пароль админки задаётся входом воркфлоу (репо приватный); после первого входа
+# смените его в /admin. Требует те же доступы, что deploy-prod.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      admin_email:
+        description: 'Email админа Payload'
+        required: true
+        default: 'm.zavod@rmz43.ru'
+      admin_password:
+        description: 'Пароль админа (смените после первого входа)'
+        required: true
+      force_restore:
+        description: 'true = пересоздать БД бокса из дампа (СНОСИТ прод-контент!)'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: prod-db
+  cancel-in-progress: false
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rmz_seed
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Схема + сид + админ в эфемерной БД CI
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rmz_seed
+          PAYLOAD_SECRET: ci-seed-only-secret-not-used-at-runtime
+          ADMIN_EMAIL: ${{ inputs.admin_email }}
+          ADMIN_PASSWORD: ${{ inputs.admin_password }}
+        run: |
+          set -e
+          pnpm payload run src/seed/pushSchema.ts
+          pnpm payload run src/seed/seedFromStage1.ts
+          pnpm payload run src/seed/createAdmin.ts
+
+      - name: pg_dump
+        run: |
+          set -e
+          PGPASSWORD=postgres pg_dump -h localhost -U postgres -d rmz_seed \
+            --no-owner --no-privileges > rmz-dump.sql
+          echo "dump: $(du -h rmz-dump.sql | cut -f1)"
+
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+        run: |
+          set -e
+          if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$DEPLOY_SSH_HOST" ] || [ -z "$DEPLOY_SSH_PORT" ]; then
+            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / vars.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519_rmz
+          chmod 600 ~/.ssh/id_ed25519_rmz
+          ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat > ~/.ssh/config <<CFG
+          Host rmz
+            HostName $DEPLOY_SSH_HOST
+            Port $DEPLOY_SSH_PORT
+            User valstan
+            IdentityFile ~/.ssh/id_ed25519_rmz
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+          CFG
+          chmod 600 ~/.ssh/config
+
+      - name: Подготовка бокса (роль/БД/env/юнит) + restore
+        run: |
+          set -e
+          scp -q rmz-dump.sql rmz:/tmp/rmz-dump.sql
+          scp -q deploy/rmz.service rmz:/tmp/rmz.service
+          ssh rmz 'bash -s' "${{ inputs.force_restore }}" <<'REMOTE'
+          set -e
+          FORCE="$1"
+
+          # 1. Роль и БД (пароль генерится здесь и никуда не уезжает)
+          if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='rmz_app'" | grep -q 1; then
+            DBPASS=$(openssl rand -hex 24)
+            sudo -u postgres psql -c "CREATE ROLE rmz_app LOGIN PASSWORD '$DBPASS'"
+            echo "роль rmz_app создана"
+          else
+            DBPASS=""
+            echo "роль rmz_app уже есть"
+          fi
+          if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='rmz'" | grep -q 1; then
+            sudo -u postgres createdb -O rmz_app rmz
+            echo "БД rmz создана"
+          else
+            echo "БД rmz уже есть"
+          fi
+
+          # 2. /etc/rmz/rmz.env (создаётся один раз; пароль роли попадает сюда же)
+          if [ ! -f /etc/rmz/rmz.env ]; then
+            if [ -z "$DBPASS" ]; then
+              DBPASS=$(openssl rand -hex 24)
+              sudo -u postgres psql -c "ALTER ROLE rmz_app PASSWORD '$DBPASS'"
+              echo "пароль rmz_app перевыпущен (env отсутствовал)"
+            fi
+            sudo mkdir -p /etc/rmz
+            sudo tee /etc/rmz/rmz.env >/dev/null <<ENV
+          DATABASE_URL=postgresql://rmz_app:$DBPASS@localhost:5432/rmz
+          PAYLOAD_SECRET=$(openssl rand -hex 32)
+          PORT=3002
+          HOSTNAME=127.0.0.1
+          NEXT_PUBLIC_SERVER_URL=https://xn--g1ajl.xn--80adkdyec4j.xn--p1ai
+          NEXT_PUBLIC_SITE_URL=https://xn--g1ajl.xn--80adkdyec4j.xn--p1ai
+          MEDIA_DIR=/home/valstan/rmz/shared/media
+          ENV
+            sudo chmod 600 /etc/rmz/rmz.env
+            echo "/etc/rmz/rmz.env создан"
+          else
+            echo "/etc/rmz/rmz.env уже есть — не трогаю"
+          fi
+
+          # 3. Каталоги
+          mkdir -p /home/valstan/rmz/releases /home/valstan/rmz/shared/media /home/valstan/rmz/acme
+
+          # 4. Restore дампа (только в пустую БД, либо force_restore=true)
+          HAVE=$(sudo -u postgres psql -d rmz -tAc "SELECT to_regclass('public.pages')")
+          if [ "$FORCE" = "true" ] && [ -n "$HAVE" ]; then
+            sudo -u postgres psql -c "DROP DATABASE rmz WITH (FORCE)"
+            sudo -u postgres createdb -O rmz_app rmz
+            HAVE=""
+            echo "force_restore: БД пересоздана"
+          fi
+          if [ -z "$HAVE" ]; then
+            DB=$(sudo grep '^DATABASE_URL=' /etc/rmz/rmz.env | sed 's/^DATABASE_URL=//')
+            psql "$DB" -v ON_ERROR_STOP=1 -q -f /tmp/rmz-dump.sql
+            echo "дамп применён: страниц в БД — $(psql "$DB" -tAc 'SELECT count(*) FROM pages')"
+          else
+            echo "БД rmz уже с данными — restore пропущен (force_restore=true чтобы пересоздать)"
+          fi
+          rm -f /tmp/rmz-dump.sql
+
+          # 5. systemd-юнит (enable без start: релиза может ещё не быть — стартанёт деплой)
+          if ! sudo cmp -s /tmp/rmz.service /etc/systemd/system/rmz.service 2>/dev/null; then
+            sudo cp /tmp/rmz.service /etc/systemd/system/rmz.service
+            sudo systemctl daemon-reload
+            echo "юнит rmz установлен/обновлён"
+          fi
+          sudo systemctl enable rmz 2>/dev/null || true
+          rm -f /tmp/rmz.service
+          echo "── бокс готов; дальше: gh workflow run deploy-prod.yml ──"
+          REMOTE
