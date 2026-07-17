@@ -71,6 +71,7 @@ export interface Config {
     faq: Faq;
     media: Media;
     users: User;
+    zayavki: Zayavki;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -82,6 +83,7 @@ export interface Config {
     faq: FaqSelect<false> | FaqSelect<true>;
     media: MediaSelect<false> | MediaSelect<true>;
     users: UsersSelect<false> | UsersSelect<true>;
+    zayavki: ZayavkiSelect<false> | ZayavkiSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
@@ -255,6 +257,22 @@ export interface User {
   collection: 'users';
 }
 /**
+ * Заявки с форм сайта. Дубль уходит письмом в отдел сбыта (если настроен SMTP).
+ *
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "zayavki".
+ */
+export interface Zayavki {
+  id: number;
+  name: string;
+  contact: string;
+  message?: string | null;
+  subject?: string | null;
+  processed?: boolean | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
@@ -293,6 +311,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'users';
         value: number | User;
+      } | null)
+    | ({
+        relationTo: 'zayavki';
+        value: number | Zayavki;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -447,6 +469,19 @@ export interface UsersSelect<T extends boolean = true> {
         createdAt?: T;
         expiresAt?: T;
       };
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "zayavki_select".
+ */
+export interface ZayavkiSelect<T extends boolean = true> {
+  name?: T;
+  contact?: T;
+  message?: T;
+  subject?: T;
+  processed?: T;
+  updatedAt?: T;
+  createdAt?: T;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema

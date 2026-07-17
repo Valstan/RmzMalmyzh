@@ -1,4 +1,5 @@
 import { postgresAdapter } from '@payloadcms/db-postgres'
+import { nodemailerAdapter } from '@payloadcms/email-nodemailer'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import sharp from 'sharp'
 import path from 'path'
@@ -9,6 +10,7 @@ import { Pages } from './collections/Pages'
 import { Faq } from './collections/Faq'
 import { Media } from './collections/Media'
 import { Users } from './collections/Users'
+import { Zayavki } from './collections/Zayavki'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -32,7 +34,29 @@ export default buildConfig({
     // вручную на этапе деплоя (паттерн Sabantuy/Kazanskaya, #017).
     push: true,
   }),
-  collections: [Pages, Faq, Media, Users],
+  collections: [Pages, Faq, Media, Users, Zayavki],
+  // Email-дубль заявок (роут /api/zayavka → payload.sendEmail). Провайдеро-независимо:
+  // любой SMTP-relay через env. Без SMTP_HOST адаптер не подключаем → письма в консоль
+  // (dev/CI), сборка зелёная без секретов. Реальные SMTP-доступы — только в
+  // /etc/rmz/rmz.env на проде (#008).
+  email: process.env.SMTP_HOST
+    ? nodemailerAdapter({
+        defaultFromAddress: process.env.SMTP_FROM_ADDRESS || 'no-reply@rmz43.ru',
+        defaultFromName: process.env.SMTP_FROM_NAME || 'Малмыжский ремзавод — сайт',
+        transportOptions: {
+          host: process.env.SMTP_HOST,
+          port: Number(process.env.SMTP_PORT) || 587,
+          // 465 = implicit TLS (secure); 587/2525 = STARTTLS (secure:false).
+          secure: process.env.SMTP_SECURE
+            ? process.env.SMTP_SECURE === 'true'
+            : Number(process.env.SMTP_PORT) === 465,
+          auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASS,
+          },
+        },
+      })
+    : undefined,
   cors: [process.env.NEXT_PUBLIC_SERVER_URL || ''].filter(Boolean),
   secret: process.env.PAYLOAD_SECRET || '',
   sharp,
