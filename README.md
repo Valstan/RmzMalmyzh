@@ -28,9 +28,9 @@ pnpm build      # статический экспорт в out/
 
 ## Деплой (план)
 
-- Бокс 1 (`92.51.22.114`), nginx-vhost отдаёт `out/` статикой; конфиг — [deploy/nginx-rmz.conf](deploy/nginx-rmz.conf).
-- CI: GitHub Actions собирает `out/` и льёт rsync'ом по изолированному deploy-ключу (#001). TLS — Let's Encrypt после привязки домена.
-- DNS: поддомен `рмз` на зоне `вмалмыже.рф` в панели Джино, A-запись → 92.51.22.114.
+- **Бокс Сабантуя** (`1942c6fc87be.vps.myjino.ru`, IP `81.177.141.140`, SSH :49338 — решение владельца 2026-07-17), nginx-vhost отдаёт `out/` статикой; конфиг — [deploy/nginx-rmz.conf](deploy/nginx-rmz.conf). Статика не добавляет RAM-нагрузки (на боксе уже 2 Node-жильца: Sabantuy + Kazanskaya, 1.5 ГБ без swap).
+- CI: GitHub Actions собирает `out/` и льёт rsync'ом по изолированному deploy-ключу (#001). TLS — Let's Encrypt после vhost.
+- DNS: ✅ создан 2026-07-17 в панели Джино — `рмз` + `*.рмз` → A `81.177.141.140`, резолвится на ns1.jino.ru и 8.8.8.8.
 
 ## Экосистема
 
