@@ -22,7 +22,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   if (!page) return {};
   return {
     title: page.title.replace(/ [-—] АО «Малмыжский ремзавод»$/, ""),
-    description: page.desc || `${page.h1} — АО «Малмыжский завод по ремонту дизельных двигателей», г. Малмыж. Работаем со всеми регионами России.`,
+    // Мусорные описания WP (типа «Звоните по телефону: tel:…» у /vakansii/) — на фолбэк (аудит §2.2)
+    description: (page.desc && !/tel:\+?\d/.test(page.desc) ? page.desc : "") ||
+      `${page.h1} — АО «Малмыжский завод по ремонту дизельных двигателей», г. Малмыж. Работаем со всеми регионами России.`,
     alternates: { canonical: page.slug },
     openGraph: page.ogImage ? { images: [page.ogImage] } : undefined,
   };
