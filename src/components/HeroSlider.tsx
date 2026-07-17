@@ -24,7 +24,7 @@ export default function HeroSlider() {
           <div key={src} className="w-full shrink-0">
             <Image
               src={src}
-              alt=""
+              alt={`Малмыжский завод по ремонту дизельных двигателей — слайд ${i + 1}`}
               width={1400}
               height={420}
               priority={i === 0}
