@@ -1,17 +1,19 @@
 import type { MetadataRoute } from "next";
-import { pages } from "@/lib/content";
+import { getAllPages } from "@/lib/cms";
 import { SITE } from "@/lib/site";
 
-export const dynamic = "force-static";
+// ISR вместо force-static: CI собирает с пустой БД, карта наполняется на проде.
+export const revalidate = 3600;
 
-export default function sitemap(): MetadataRoute.Sitemap {
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  const pages = await getAllPages();
   return [
-    // Страницы вне pages.json (новые, не из копии WP)
+    // Страницы вне Payload (свои роуты)
     { url: `${SITE.url}/voprosy-i-otvety/`, priority: 0.8 },
     ...pages.map((p) => ({
-      url: `${SITE.url}${p.slug}`,
-      lastModified: p.published ? new Date(p.published) : undefined,
-      priority: p.slug === "/" ? 1 : p.isPost ? 0.5 : 0.7,
+      url: `${SITE.url}${p.path}`,
+      lastModified: p.publishedAt ? new Date(p.publishedAt) : undefined,
+      priority: p.path === "/" ? 1 : p.isPost ? 0.5 : 0.7,
     })),
   ];
 }

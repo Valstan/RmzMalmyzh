@@ -6,16 +6,18 @@
 
 ## Быстрые факты
 
-- **Прод (стадия 1):** https://рмз.вмалмыже.рф/ — статическая копия rmz43.ru (128 страниц, URL-паритет 1:1), LIVE на Боксе Сабантуя, nginx, TLS есть.
-- **Стек:** Next.js 15 App Router + TS + Tailwind 4, pnpm, `output: 'export'` → `out/`. Никаких Node-процессов на боксе.
-- **Стадия 2** (Payload CMS, новый UI, бэкенд форм) — **только после явного GO владельца**.
+- **Прод:** https://рмз.вмалмыже.рф/ — Бокс Сабантуя, nginx, TLS есть. Стадия 2: Next standalone + Payload, **третий Node-жилец** (:3002, systemd `rmz`, MemoryMax=512M) рядом с Sabantuy (:3000) и Kazanskaya (:3001).
+- **Стек:** Next.js 15 App Router + TS + Tailwind 4 + **Payload 3.75 + PostgreSQL** (стандарт экосистемы, образец — KazanskayaMalmyzh), pnpm, standalone-сборка в CI по флагу `STANDALONE_BUILD=1`.
+- **Контент:** 128 страниц стадии 1 живут в Payload (коллекция `pages`, HTML-поле) + `faq` + `zayavki` (формы). Правки — в `/admin`. Сид: `src/seed/seedFromStage1.ts`.
+- **GO владельца на стадию 2 получен 2026-07-17** (третий жилец на том же боксе, решение владельца).
 - Контент-конвейер: `pnpm parse-mirror` → `content/pages.json`, `pnpm fetch-images` (повторный харвест rmz43.ru).
 - План улучшений и аудит: `docs/AUDIT-rmz43.md`.
 
 ## Гейты и деплой
 
-- Гейты перед PR: `corepack pnpm lint && corepack pnpm build`.
-- Мерж в `main` → **авто-деплой на прод** (`deploy-prod.yml`: сборка в CI, tar → releases → symlink) + смоук #011 (200 + маркер «Малмыжский» + XFP-301).
+- Гейты перед PR: `corepack pnpm lint && corepack pnpm typecheck && corepack pnpm build` (build требует локальный Postgres — `.env.example`).
+- Мерж в `main` → **авто-деплой на прод** (`deploy-prod.yml`: standalone-сборка в CI с эфемерным Postgres, tar → releases → symlink → `systemctl restart rmz`) + смоук #011 (Node :3002 → 200, маркер «Малмыжский», /admin, XFP-301).
+- Первичная подготовка бокса — `setup-prod-stage2.yml` (dispatch: БД+роль, /etc/rmz/rmz.env, юнит, restore сида, админ). Будущие миграции схемы — вручную ДО деплоя (guard #017), паттерн apply-migration Сабантуя.
 - ⚠️ С dev-машины PC40 SSH на бокс режется на banner exchange — вся диагностика прода **только через Actions** (`probe-prod.yml`).
 - PR-flow: ветка → PR → squash-merge. Прямых пушей в `main` нет.
 

@@ -1,12 +1,16 @@
 import type { NextConfig } from "next";
+import { withPayload } from "@payloadcms/next/withPayload";
 
-// Стадия 1 — статическая копия rmz43.ru: output:'export' отдаётся nginx'ом с
-// Бокса 1 без Node-процесса (RAM бокса впритык). При переходе к стадии 2
-// (Payload CMS, формы) экспорт заменяется на output:'standalone'.
+// Стадия 2: Payload CMS + SSR/ISR, третий Node-жилец Бокса Сабантуя (:3002).
+// Прод-VPS (1.5 GiB RAM без swap) не тянет `next build` (OOM, G20) — сборка едет
+// в CI, на сервер кладём standalone-артефакт.
+//
+// ⚠️ standalone-сборка мутирует локальный node_modules (outputFileTracing),
+// поэтому включается ТОЛЬКО по флагу STANDALONE_BUILD=1 (его ставит deploy-prod.yml).
 const nextConfig: NextConfig = {
-  output: "export",
+  output: process.env.STANDALONE_BUILD === "1" ? "standalone" : undefined,
   trailingSlash: true, // URL-паритет с rmz43.ru (WordPress завершает всё «/»)
-  images: { unoptimized: true },
+  reactStrictMode: true,
 };
 
-export default nextConfig;
+export default withPayload(nextConfig, { devBundleServerPackages: false });

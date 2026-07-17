@@ -2,18 +2,31 @@
   "name": "rmz-malmyzh",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "cross-env NODE_OPTIONS=--no-deprecation next dev",
+    "build": "cross-env NODE_OPTIONS=\"--no-deprecation --max-old-space-size=4096\" next build",
+    "start": "cross-env NODE_OPTIONS=--no-deprecation next start",
+    "typecheck": "tsc --noEmit",
+    "payload": "cross-env NODE_OPTIONS=--no-deprecation payload",
+    "generate:types": "cross-env NODE_OPTIONS=--no-deprecation payload generate:types",
+    "generate:importmap": "cross-env NODE_OPTIONS=--no-deprecation payload generate:importmap",
     "lint": "eslint src scripts",
     "parse-mirror": "node scripts/parse-mirror.mjs",
     "fetch-images": "node scripts/fetch-images.mjs"
   },
   "dependencies": {
+    "@payloadcms/db-postgres": "3.75.0",
+    "@payloadcms/email-nodemailer": "3.75.0",
+    "@payloadcms/next": "3.75.0",
+    "@payloadcms/richtext-lexical": "3.75.0",
+    "cross-env": "^10.1.0",
+    "graphql": "^16.14.2",
     "next": "^15.5.0",
+    "payload": "3.75.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "sharp": "0.34.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.6",
@@ -25,7 +38,7 @@
     "eslint": "^9.39.5",
     "eslint-config-next": "^15.5.20",
     "tailwindcss": "^4.1.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.7.3"
   },
   "packageManager": "pnpm@11.0.8"
 }

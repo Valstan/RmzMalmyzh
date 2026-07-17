@@ -1,14 +1,9 @@
-import type { Metadata } from "next";
-import Link from "next/link";
-import { SITE } from "@/lib/site";
-
 /**
- * FAQ с разметкой FAQPage (аудит §3.4) — главный формат, который LLM-поисковики
- * пересказывают дословно. Все ответы — строго из фактического контента сайта
- * (страницы услуг, «О предприятии», «Бесплатная доставка»); ничего не выдумано.
+ * FAQ стадии 1 (страница /voprosy-i-otvety/, аудит §3.4) — исходник для сида.
+ * Все ответы — строго из фактического контента сайта; ничего не выдумано.
+ * После сида правки живут в админке (коллекция faq).
  */
-
-const FAQ: { q: string; a: string; links?: { href: string; label: string }[] }[] = [
+export const FAQ_SEED: { q: string; a: string; links?: { href: string; label: string }[] }[] = [
   {
     q: "Какие двигатели ремонтирует Малмыжский ремзавод?",
     a: "Завод выполняет капитальный ремонт дизельных двигателей Д6, Д12, 1Д12, ЯМЗ-236, ЯМЗ-238, К-661, К-161М2, Д-160/180, А-01, В2, двигателей КамАЗ и ЗИЛ-130, а также судовых и тепловозных дизелей. Кроме двигателей ремонтируются судовые реверс-редукторы и гидропередачи для тепловозов.",
@@ -40,56 +35,7 @@ const FAQ: { q: string; a: string; links?: { href: string; label: string }[] }[]
   },
   {
     q: "Как заказать ремонт или узнать стоимость?",
-    a: `Позвоните в отдел продаж по телефону ${"+7 (952) 783-07-82"} или напишите на sales@rmz43.ru — специалисты согласуют с вами стоимость и сроки. Завод работает со всеми регионами России. Адрес: 612920, Кировская область, г. Малмыж, ул. Дружбы, 2.`,
+    a: "Позвоните в отдел продаж по телефону +7 (952) 783-07-82 или напишите на sales@rmz43.ru — специалисты согласуют с вами стоимость и сроки. Завод работает со всеми регионами России. Адрес: 612920, Кировская область, г. Малмыж, ул. Дружбы, 2.",
     links: [{ href: "/kontakty/", label: "Контакты" }],
   },
 ];
-
-export const metadata: Metadata = {
-  title: "Вопросы и ответы о ремонте дизельных двигателей",
-  description:
-    "Частые вопросы: какие двигатели ремонтируем (Д6, Д12, ЯМЗ, КамАЗ), как проходит капремонт, стендовые испытания, бесплатная доставка, покупка двигателей после капремонта.",
-  alternates: { canonical: "/voprosy-i-otvety/" },
-};
-
-const faqJsonLd = {
-  "@context": "https://schema.org",
-  "@type": "FAQPage",
-  mainEntity: FAQ.map((f) => ({
-    "@type": "Question",
-    name: f.q,
-    acceptedAnswer: { "@type": "Answer", text: f.a },
-  })),
-};
-
-export default function FaqPage() {
-  return (
-    <div className="mx-auto max-w-4xl px-4 py-8">
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(faqJsonLd) }}
-      />
-      <h1 className="text-3xl font-bold mb-6">Вопросы и ответы</h1>
-      <p className="text-neutral-600 mb-8">
-        Ответы на частые вопросы о капитальном ремонте дизельных двигателей на {SITE.shortName.toLowerCase()}е.
-      </p>
-      <div className="space-y-6">
-        {FAQ.map((f) => (
-          <section key={f.q} className="border-b border-neutral-200 pb-6">
-            <h2 className="text-xl font-semibold mb-2">{f.q}</h2>
-            <p className="text-neutral-700">{f.a}</p>
-            {f.links && (
-              <p className="mt-2 text-sm">
-                {f.links.map((l) => (
-                  <Link key={l.href} href={l.href} className="text-[var(--accent)] hover:underline mr-4">
-                    {l.label} →
-                  </Link>
-                ))}
-              </p>
-            )}
-          </section>
-        ))}
-      </div>
-    </div>
-  );
-}

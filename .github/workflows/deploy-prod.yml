@@ -1,9 +1,10 @@
 name: Deploy to production
 
-# Статический экспорт собирается в CI (G20: на боксе не собираем) и льётся на
-# Бокс Сабантуя. nginx отдаёт /home/valstan/rmz/current — Node-процесса нет,
-# RAM-нагрузка ≈ 0 рядом с жильцами Sabantuy/Kazanskaya.
-# Харвест deploy-prod.yml KazanskayaMalmyzh (ADR-0007), упрощён под статику.
+# Стадия 2: standalone-артефакт Next+Payload на Бокс Сабантуя (третий жилец, :3002).
+# Сборка строго в CI (G20: бокс 1.5 GiB swapless не тянет next build), на сервер
+# едет tar → releases/<sha> → symlink current → systemctl restart rmz.
+# Харвест deploy-prod.yml KazanskayaMalmyzh (ADR-0007).
+# Первичная подготовка бокса (БД, /etc/rmz/rmz.env, юнит) — setup-prod-stage2.yml.
 #
 # Требуется:
 #   secrets.SSH_PRIVATE_KEY   — изолированный ключ id_ed25519_rmz_deploy (#001)
@@ -16,10 +17,12 @@ on:
     branches: [main]
     paths-ignore:
       - 'docs/**'
+      - 'mailbox/**'
       - '**.md'
       - '.claude/**'
       - '.github/workflows/probe-prod.yml'
       - '.github/workflows/apply-authorize-key.yml'
+      - '.github/workflows/setup-prod-stage2.yml'
   workflow_dispatch:
 
 concurrency:
@@ -29,17 +32,48 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rmz_build
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+
+      # Предохранитель миграций (#017): будущие Payload-миграции применяются на
+      # проде вручную ДО деплоя (паттерн apply-migration Сабантуя); CI лишь
+      # проверяет, что в коммите нет неприменённых. dispatch = «уже применил».
+      - name: Migration guard
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          set -e
+          NEW=$(git diff --name-only --diff-filter=A HEAD~1 HEAD -- 'src/migrations/*.ts' | grep -v '/index\.ts$' || true)
+          if [ -n "$NEW" ]; then
+            echo "::error::Коммит вносит новые Payload-миграции. Примени их на проде вручную, затем запусти деплой через workflow_dispatch."
+            echo "$NEW"
+            exit 1
+          fi
+          echo "Новых Payload-миграций в коммите нет — деплой продолжается."
 
       - uses: pnpm/action-setup@v4
-
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version: 22
           cache: pnpm
-
       - run: pnpm install --frozen-lockfile
 
       # Картинки с rmz43.ru: кэшируются по манифесту, скрипт докачивает недостающее
@@ -47,16 +81,43 @@ jobs:
         with:
           path: public/images/wp
           key: wp-images-${{ hashFiles('content/images-manifest.json') }}
-
       - run: pnpm fetch-images
 
-      - name: Build static export
+      - name: Generate importmap + types
+        run: |
+          pnpm generate:importmap
+          pnpm generate:types
+
+      # push:true создаёт схему только в dev-рантайме; prerender при build лезет
+      # в таблицы (llms.txt/sitemap) — схему в эфемерной БД создаём явно.
+      - name: Push schema to ephemeral DB
         env:
-          NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rmz_build
+          PAYLOAD_SECRET: ci-build-only-secret-not-used-at-runtime
+        run: pnpm payload run src/seed/pushSchema.ts
+      - name: Build (standalone)
+        env:
+          # Эфемерная БД CI: push:true создаёт схему здесь, prerender отдаёт
+          # каркас — рантайм наполнит через ISR/ревалидацию из БД бокса.
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rmz_build
+          PAYLOAD_SECRET: ci-build-only-secret-not-used-at-runtime
+          NEXT_PUBLIC_SERVER_URL: ${{ vars.NEXT_PUBLIC_SITE_URL || 'http://127.0.0.1:3002' }}
+          NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL || 'http://127.0.0.1:3002' }}
+          STANDALONE_BUILD: '1'
         run: pnpm build
 
-      - name: Pack
-        run: tar czf rmz-site.tgz -C out .
+      - name: Assemble standalone bundle
+        run: |
+          set -e
+          if [ ! -f .next/standalone/server.js ]; then
+            echo "::error::server.js не в корне .next/standalone — проверь outputFileTracingRoot"
+            find .next/standalone -maxdepth 3 -name server.js || true
+            exit 1
+          fi
+          cp -r .next/static .next/standalone/.next/static
+          if [ -d public ]; then cp -r public .next/standalone/public; fi
+          tar czf rmz-app.tgz -C .next/standalone .
+          echo "bundle: $(du -h rmz-app.tgz | cut -f1)"
 
       - name: Setup SSH
         env:
@@ -85,37 +146,43 @@ jobs:
           CFG
           chmod 600 ~/.ssh/config
 
-      - name: Ship + activate release
+      - name: Ship artifact + restart
         run: |
           set -e
-          scp -q rmz-site.tgz rmz:/tmp/rmz-site.tgz
+          scp -q rmz-app.tgz rmz:/tmp/rmz-app.tgz
           ssh rmz 'bash -s' "${{ github.sha }}" <<'REMOTE'
           set -e
           SHA="$1"
           BASE=/home/valstan/rmz
+          test -f /etc/rmz/rmz.env || { echo "::error::/etc/rmz/rmz.env нет — сначала setup-prod-stage2.yml"; exit 1; }
           REL="$BASE/releases/$SHA"
           rm -rf "$REL"; mkdir -p "$REL"
-          tar xzf /tmp/rmz-site.tgz -C "$REL"
-          rm -f /tmp/rmz-site.tgz
-          # nginx (www-data) должен читать статику из-под /home/valstan
-          chmod o+x /home/valstan "$BASE" "$BASE/releases"
-          chmod -R o+rX "$REL"
+          tar xzf /tmp/rmz-app.tgz -C "$REL"
+          rm -f /tmp/rmz-app.tgz
+          # Персистентное медиа (G146): public/media в релизе → симлинк на shared/media
+          mkdir -p "$BASE/shared/media" "$REL/public"
+          rm -rf "$REL/public/media"
+          ln -sfn "$BASE/shared/media" "$REL/public/media"
           ln -sfn "$REL" "$BASE/current"
+          sudo systemctl restart rmz
           # держим последние 3 релиза
           ls -1dt "$BASE"/releases/*/ 2>/dev/null | tail -n +4 | xargs -r rm -rf
-          echo "shipped $SHA"
+          echo "deployed $SHA"
           REMOTE
 
+      # vhost ПОСЛЕ рестарта сервиса: если Node не поднялся, nginx остаётся старым
+      # (статика стадии 1 продолжает отдаваться) и смоук честно краснеет.
       - name: Install/refresh nginx vhost (idempotent)
         run: |
           set -e
           scp -q deploy/nginx-rmz.conf rmz:/tmp/nginx-rmz.conf
           ssh rmz 'bash -s' <<'REMOTE'
           set -e
-          if ! command -v nginx >/dev/null; then
-            echo "::error::nginx не найден на боксе"; ls /etc/nginx/ 2>&1 || true; exit 1
-          fi
-          # раскладка бокса: Debian sites-available/enabled ИЛИ conf.d
+          # smoke сервиса до переключения nginx
+          sleep 6
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 http://127.0.0.1:3002/ || true)
+          echo "node :3002 / → $code"
+          [ "$code" = "200" ] || { echo "::error::rmz-сервис не отвечает 200 — nginx не переключаю"; sudo journalctl -u rmz -n 40 --no-pager || true; exit 1; }
           if [ -d /etc/nginx/sites-available ]; then
             DEST=/etc/nginx/sites-available/rmz.conf
             ENABLE=/etc/nginx/sites-enabled/rmz.conf
@@ -123,8 +190,6 @@ jobs:
             DEST=/etc/nginx/conf.d/rmz.conf
             ENABLE=
           fi
-          echo "nginx layout: $(ls /etc/nginx/ | tr '\n' ' ')"
-          echo "vhost dest: $DEST"
           if sudo cmp -s /tmp/nginx-rmz.conf "$DEST" 2>/dev/null; then
             echo "vhost без изменений"
           else
@@ -137,7 +202,7 @@ jobs:
           rm -f /tmp/nginx-rmz.conf
           REMOTE
 
-      # #011 content-smoke: 200 + контент-маркер, с XFP=https чтобы не поймать редирект
+      # #011 content-smoke: 200 + контент-маркер + /admin, XFP=https против петли редиректа
       - name: Smoke check
         run: |
           set -e
@@ -145,13 +210,22 @@ jobs:
           set -e
           H="Host: xn--g1ajl.xn--80adkdyec4j.xn--p1ai"
           code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "$H" -H "X-Forwarded-Proto: https" http://127.0.0.1/)
-          echo "local / → $code"
+          echo "nginx / → $code"
           [ "$code" = "200" ] || { echo "::error::ожидался 200"; exit 1; }
           if curl -s --max-time 15 -H "$H" -H "X-Forwarded-Proto: https" http://127.0.0.1/ | grep -q "Малмыжский"; then
             echo "content marker OK: «Малмыжский» на главной"
           else
             echo "::error::контент-маркер не найден"; exit 1
           fi
+          admin=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "$H" -H "X-Forwarded-Proto: https" http://127.0.0.1/admin)
+          echo "/admin → $admin (ожидается 200/30x)"
+          case "$admin" in 200|301|302|307|308) ;; *) echo "::error::/admin = $admin"; exit 1;; esac
           redirect=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "$H" -H "X-Forwarded-Proto: http" http://127.0.0.1/)
           echo "XFP=http / → $redirect (ожидается 301)"
           REMOTE
+
+      - name: On failure — журналы прода
+        if: failure()
+        run: |
+          ssh rmz "sudo systemctl status rmz --no-pager -l" 2>&1 || true
+          ssh rmz "sudo journalctl -u rmz -n 80 --no-pager" 2>&1 || true
