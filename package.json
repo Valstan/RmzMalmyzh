@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint src scripts",
     "parse-mirror": "node scripts/parse-mirror.mjs",
     "fetch-images": "node scripts/fetch-images.mjs"
   },
@@ -16,12 +16,16 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.6",
     "@tailwindcss/postcss": "^4.1.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "cheerio": "^1.0.0",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^15.5.20",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.8.0"
-  }
+  },
+  "packageManager": "pnpm@11.0.8"
 }
