@@ -88,6 +88,13 @@ jobs:
           pnpm generate:importmap
           pnpm generate:types
 
+      # push:true создаёт схему только в dev-рантайме; prerender при build лезет
+      # в таблицы (llms.txt/sitemap) — схему в эфемерной БД создаём явно.
+      - name: Push schema to ephemeral DB
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rmz_build
+          PAYLOAD_SECRET: ci-build-only-secret-not-used-at-runtime
+        run: pnpm payload run src/seed/pushSchema.ts
       - name: Build (standalone)
         env:
           # Эфемерная БД CI: push:true создаёт схему здесь, prerender отдаёт
