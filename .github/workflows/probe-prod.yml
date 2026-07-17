@@ -1,0 +1,61 @@
+name: Probe prod (manual)
+
+# Диагностика с бокса (с dev-машин HTTP-пробы глохнут — G147):
+# внешняя петля бокс -> прокси Джино -> бокс, ACME-путь, TLS-CN.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+        run: |
+          set -e
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519_rmz
+          chmod 600 ~/.ssh/id_ed25519_rmz
+          ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat > ~/.ssh/config <<CFG
+          Host rmz
+            HostName $DEPLOY_SSH_HOST
+            Port $DEPLOY_SSH_PORT
+            User valstan
+            IdentityFile ~/.ssh/id_ed25519_rmz
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+          CFG
+          chmod 600 ~/.ssh/config
+
+      - name: Probe from box (external loop)
+        run: |
+          ssh rmz 'bash -s' <<'REMOTE'
+          D=xn--g1ajl.xn--80adkdyec4j.xn--p1ai
+          echo "== DNS с бокса =="
+          getent hosts "$D" || true
+          echo "== http / (внешняя петля) =="
+          curl -s -o /dev/null -w 'status %{http_code}, redirect: %{redirect_url}\n' --max-time 20 "http://$D/" || echo "http FAIL"
+          echo "== http ACME-путь =="
+          curl -s -o /dev/null -w 'status %{http_code}\n' --max-time 20 "http://$D/.well-known/acme-challenge/probe123" || echo "acme FAIL"
+          echo "== https: кто терминирует (CN серта) =="
+          echo | timeout 20 openssl s_client -connect "$D:443" -servername "$D" 2>/dev/null | openssl x509 -noout -subject -issuer -dates 2>/dev/null || echo "s_client FAIL"
+          echo "== https / =="
+          curl -sk -o /dev/null -w 'status %{http_code}\n' --max-time 20 "https://$D/" || echo "https FAIL"
+          REMOTE
+
+      # Также с раннера (внешняя точка без DPI)
+      - name: Probe from runner
+        run: |
+          D=xn--g1ajl.xn--80adkdyec4j.xn--p1ai
+          echo "== http / с раннера =="
+          curl -s -o /dev/null -w 'status %{http_code}, redirect: %{redirect_url}\n' --max-time 20 "http://$D/" || echo "http FAIL"
+          echo "== http ACME-путь с раннера =="
+          curl -s -o /dev/null -w 'status %{http_code}\n' --max-time 20 "http://$D/.well-known/acme-challenge/probe123" || echo "acme FAIL"
+          echo "== https CN с раннера =="
+          echo | timeout 20 openssl s_client -connect "$D:443" -servername "$D" 2>/dev/null | openssl x509 -noout -subject -issuer -dates 2>/dev/null || echo "s_client FAIL"

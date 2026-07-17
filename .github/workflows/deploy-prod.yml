@@ -18,6 +18,8 @@ on:
       - 'docs/**'
       - '**.md'
       - '.claude/**'
+      - '.github/workflows/probe-prod.yml'
+      - '.github/workflows/apply-authorize-key.yml'
   workflow_dispatch:
 
 concurrency:
