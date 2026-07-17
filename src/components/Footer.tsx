@@ -24,6 +24,7 @@ export default function Footer() {
         <div>
           <h3 className="text-white font-bold mb-3">Информация</h3>
           <ul className="space-y-1.5">
+            <li><Link href="/voprosy-i-otvety/" className="hover:text-white">Вопросы и ответы</Link></li>
             <li><Link href="/raskrytie-informacii/" className="hover:text-white">Раскрытие информации</Link></li>
             <li><Link href="/tekhnicheskaya-informaciya/" className="hover:text-white">Техническая информация</Link></li>
             <li><Link href="/privacy-policy/" className="hover:text-white">Политика конфиденциальности</Link></li>
