@@ -119,4 +119,4 @@ const run = async () => {
   process.exit(0)
 }
 
-void run()
+await run()

@@ -70,6 +70,10 @@ jobs:
           pnpm payload run src/seed/pushSchema.ts
           pnpm payload run src/seed/seedFromStage1.ts
           pnpm payload run src/seed/createAdmin.ts
+          # страховка от «молчаливого» сида: в БД должны лежать страницы
+          N=$(docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_seed -tAc "SELECT count(*) FROM pages")
+          echo "страниц в CI-БД: $N"
+          [ "$N" -ge 100 ] || { echo "::error::сид не наполнил БД (pages=$N)"; exit 1; }
 
       - name: pg_dump
         run: |
@@ -168,7 +172,9 @@ jobs:
           if [ -z "$HAVE" ]; then
             DB=$(sudo grep '^DATABASE_URL=' /etc/rmz/rmz.env | sed 's/^DATABASE_URL=//')
             psql "$DB" -v ON_ERROR_STOP=1 -q -f /tmp/rmz-dump.sql
-            echo "дамп применён: страниц в БД — $(psql "$DB" -tAc 'SELECT count(*) FROM pages')"
+            N=$(psql "$DB" -tAc 'SELECT count(*) FROM pages')
+            echo "дамп применён: страниц в БД — $N"
+            [ "$N" -ge 100 ] || { echo "::error::restore прошёл, но pages=$N — дамп пустой"; exit 1; }
           else
             echo "БД rmz уже с данными — restore пропущен (force_restore=true чтобы пересоздать)"
           fi
