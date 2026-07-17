@@ -26,11 +26,12 @@ pnpm dev        # http://localhost:3000
 pnpm build      # статический экспорт в out/
 ```
 
-## Деплой (план)
+## Деплой
 
-- **Бокс Сабантуя** (`1942c6fc87be.vps.myjino.ru`, IP `81.177.141.140`, SSH :49338 — решение владельца 2026-07-17), nginx-vhost отдаёт `out/` статикой; конфиг — [deploy/nginx-rmz.conf](deploy/nginx-rmz.conf). Статика не добавляет RAM-нагрузки (на боксе уже 2 Node-жильца: Sabantuy + Kazanskaya, 1.5 ГБ без swap).
-- CI: GitHub Actions собирает `out/` и льёт rsync'ом по изолированному deploy-ключу (#001). TLS — Let's Encrypt после vhost.
-- DNS: ✅ создан 2026-07-17 в панели Джино — `рмз` + `*.рмз` → A `81.177.141.140`, резолвится на ns1.jino.ru и 8.8.8.8.
+- ✅ **LIVE на Боксе Сабантуя** (`1942c6fc87be.vps.myjino.ru`, IP `81.177.141.140`, SSH :49338): CI-деплой `deploy-prod.yml` — сборка в CI (G20), tar → releases/<sha> → symlink `current`, nginx-vhost `/etc/nginx/conf.d/rmz.conf` (раскладка бокса — conf.d, не sites-available), смоук #011 (200 + маркер + XFP-301).
+- Деплой-ключ: изолированный `id_ed25519_rmz_deploy` (#001) — приватная часть в `secrets.SSH_PRIVATE_KEY` + машина владельца (`~/.ssh/`, host-алиас `rmz`); авторизован на боксе bootstrap-воркфлоу, временный секрет удалён. ⚠️ С dev-машины PC40 SSH на бокс режется на banner exchange — все операции через Actions (probe-prod.yml).
+- DNS: ✅ `рмз` + `*.рмз` → A `81.177.141.140` (панель Джино, привязка VPS «Сабантуй Малмыж»), консистентно на ns1-3 + 8.8.8.8.
+- TLS: ⏳ выпуск LE из панели Джино пока падает — **петля прокси для свежего домена**, см. [docs/JINO-TLS-NOTES.md](docs/JINO-TLS-NOTES.md); повторять «Установить» в панели (SSL-вкладка домена).
 
 ## Экосистема
 
