@@ -112,11 +112,24 @@ jobs:
           scp -q deploy/nginx-rmz.conf rmz:/tmp/nginx-rmz.conf
           ssh rmz 'bash -s' <<'REMOTE'
           set -e
-          if sudo cmp -s /tmp/nginx-rmz.conf /etc/nginx/sites-available/rmz.conf 2>/dev/null; then
+          if ! command -v nginx >/dev/null; then
+            echo "::error::nginx не найден на боксе"; ls /etc/nginx/ 2>&1 || true; exit 1
+          fi
+          # раскладка бокса: Debian sites-available/enabled ИЛИ conf.d
+          if [ -d /etc/nginx/sites-available ]; then
+            DEST=/etc/nginx/sites-available/rmz.conf
+            ENABLE=/etc/nginx/sites-enabled/rmz.conf
+          else
+            DEST=/etc/nginx/conf.d/rmz.conf
+            ENABLE=
+          fi
+          echo "nginx layout: $(ls /etc/nginx/ | tr '\n' ' ')"
+          echo "vhost dest: $DEST"
+          if sudo cmp -s /tmp/nginx-rmz.conf "$DEST" 2>/dev/null; then
             echo "vhost без изменений"
           else
-            sudo cp /tmp/nginx-rmz.conf /etc/nginx/sites-available/rmz.conf
-            sudo ln -sfn /etc/nginx/sites-available/rmz.conf /etc/nginx/sites-enabled/rmz.conf
+            sudo cp /tmp/nginx-rmz.conf "$DEST"
+            if [ -n "$ENABLE" ]; then sudo ln -sfn "$DEST" "$ENABLE"; fi
             sudo nginx -t
             sudo systemctl reload nginx
             echo "vhost обновлён, nginx перечитан"
