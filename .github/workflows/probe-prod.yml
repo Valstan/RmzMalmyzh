@@ -37,16 +37,23 @@ jobs:
         run: |
           ssh rmz 'bash -s' <<'REMOTE'
           D=xn--g1ajl.xn--80adkdyec4j.xn--p1ai
-          echo "== DNS с бокса =="
-          getent hosts "$D" || true
-          echo "== http / (внешняя петля) =="
-          curl -s -o /dev/null -w 'status %{http_code}, redirect: %{redirect_url}\n' --max-time 20 "http://$D/" || echo "http FAIL"
-          echo "== http ACME-путь =="
-          curl -s -o /dev/null -w 'status %{http_code}\n' --max-time 20 "http://$D/.well-known/acme-challenge/probe123" || echo "acme FAIL"
-          echo "== https: кто терминирует (CN серта) =="
-          echo | timeout 20 openssl s_client -connect "$D:443" -servername "$D" 2>/dev/null | openssl x509 -noout -subject -issuer -dates 2>/dev/null || echo "s_client FAIL"
-          echo "== https / =="
-          curl -sk -o /dev/null -w 'status %{http_code}\n' --max-time 20 "https://$D/" || echo "https FAIL"
+          K=xn--80aaa0andu6a3j.xn--80adkdyec4j.xn--p1ai
+          echo "== vhost на боксе (локации) =="
+          sudo grep -n "location\|return 301\|server_name" /etc/nginx/conf.d/rmz.conf || true
+          echo "== ЛОКАЛЬНО (мимо прокси): ACME-путь без XFP =="
+          curl -s -o /dev/null -w 'status %{http_code}\n' --max-time 10 -H "Host: $D" "http://127.0.0.1/.well-known/acme-challenge/probe123"
+          echo "== ЛОКАЛЬНО: / без XFP =="
+          curl -s -o /dev/null -w 'status %{http_code} -> %{redirect_url}\n' --max-time 10 -H "Host: $D" "http://127.0.0.1/"
+          echo "== ВНЕШНЯЯ ПЕТЛЯ: ACME-путь (куда 301?) =="
+          curl -s -o /dev/null -w 'status %{http_code} -> %{redirect_url}\n' --max-time 20 "http://$D/.well-known/acme-challenge/probe123" || echo "acme FAIL"
+          echo "== ВНЕШНЯЯ ПЕТЛЯ: https / (куда 302?) =="
+          curl -sk -o /dev/null -w 'status %{http_code} -> %{redirect_url}\n' --max-time 20 "https://$D/" || echo "https FAIL"
+          echo "== СРАВНЕНИЕ казанская: http ACME =="
+          curl -s -o /dev/null -w 'status %{http_code} -> %{redirect_url}\n' --max-time 20 "http://$K/.well-known/acme-challenge/probe123" || echo "kaz acme FAIL"
+          echo "== СРАВНЕНИЕ казанская: https CN =="
+          echo | timeout 20 openssl s_client -connect "$K:443" -servername "$K" 2>/dev/null | openssl x509 -noout -subject 2>/dev/null || echo "kaz s_client FAIL"
+          echo "== рмз https CN сейчас =="
+          echo | timeout 20 openssl s_client -connect "$D:443" -servername "$D" 2>/dev/null | openssl x509 -noout -subject -dates 2>/dev/null || echo "s_client FAIL"
           REMOTE
 
       # Также с раннера (внешняя точка без DPI)
