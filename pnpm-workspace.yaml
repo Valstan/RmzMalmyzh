@@ -1,3 +1,4 @@
 # sharp не нужен (images.unoptimized в static export) — его postinstall осознанно не запускаем
 allowBuilds:
   sharp: false
+  unrs-resolver: false # пребилт-бинарь ставится optional-депом, postinstall-фолбэк не нужен
