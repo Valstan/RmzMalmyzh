@@ -7,7 +7,8 @@ import { SITE } from "@/lib/site";
 export const metadata: Metadata = {
   metadataBase: new URL(SITE.url),
   title: {
-    default: SITE.name,
+    // Аудит §2.2: в title главной — коммерческие запросы, а не только название АО
+    default: `Капитальный ремонт дизельных двигателей Д6, Д12, ЯМЗ — ${SITE.shortName}`,
     template: `%s — ${SITE.shortName}`,
   },
   description:
