@@ -30,6 +30,7 @@ export const NAV: NavItem[] = [
       { label: "Галерея", href: "/galereya/" },
       { label: "Видео", href: "/o-predpriyatii/video/" },
       { label: "Раскрытие информации", href: "/raskrytie-informacii/" },
+      { label: "Вопросы и ответы", href: "/voprosy-i-otvety/" },
     ],
   },
   {
