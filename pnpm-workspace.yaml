@@ -1,4 +1,5 @@
-# sharp не нужен (images.unoptimized в static export) — его postinstall осознанно не запускаем
+# Стадия 2: sharp нужен Payload'у (обработка загрузок), esbuild — Payload CLI.
 allowBuilds:
-  sharp: false
+  esbuild: true
+  sharp: true
   unrs-resolver: false # пребилт-бинарь ставится optional-депом, postinstall-фолбэк не нужен
