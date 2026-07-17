@@ -74,7 +74,9 @@ jobs:
       - name: pg_dump
         run: |
           set -e
-          PGPASSWORD=postgres pg_dump -h localhost -U postgres -d rmz_seed \
+          # раннер несёт client 16, сервис — PG 17 → ставим client 17 (pgdg-репо уже настроен)
+          sudo apt-get -qq update && sudo apt-get -qq -y install postgresql-client-17 >/dev/null
+          PGPASSWORD=postgres /usr/lib/postgresql/17/bin/pg_dump -h localhost -U postgres -d rmz_seed \
             --no-owner --no-privileges > rmz-dump.sql
           echo "dump: $(du -h rmz-dump.sql | cut -f1)"
 
