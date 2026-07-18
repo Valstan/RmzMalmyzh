@@ -42,8 +42,10 @@ node -e "const fs=require('fs');const f=process.argv[1];const b=fs.readFileSync(
 ## 5. Если трогался код — перепроверь гейты
 
 ```bash
-corepack pnpm lint && corepack pnpm build
+corepack pnpm lint && corepack pnpm typecheck && corepack pnpm build
 ```
+
+⚠️ Со стадии 2 `build` требует Postgres (`.env`, образец — `.env.example`): Payload читает БД на пререндере.
 
 ## 6. Доложи и продолжи
 

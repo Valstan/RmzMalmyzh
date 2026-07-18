@@ -29,7 +29,7 @@ gh pr list --state open
 ## Шаг 3. Незакоммиченная работа → через PR-flow (НЕ в `main` напрямую)
 
 Если `git status` непустой помимо handoff/доков:
-1. **Гейты** (если трогался код): `corepack pnpm lint && corepack pnpm build` (build = статический экспорт в `out/`; он же typecheck).
+1. **Гейты** (если трогался код): `corepack pnpm lint && corepack pnpm typecheck && corepack pnpm build`. С стадии 2 сборка требует Postgres (`.env`, см. `.env.example`) — Payload лезет в БД на пререндере.
 2. **NUL-чек** (грабля харнесса): `git add -A && git diff --cached --stat` — любой исходник как `Bin` → вычистить NUL и пересохранить UTF-8 (см. `/obriv` шаг 3).
 3. Ветка `feat/ fix/ chore/ docs/ refactor/` → коммит → `git push -u origin <ветка>` → `gh pr create` → CI зелёный → **авто-мерж** `gh pr merge --squash --delete-branch` (mandate #027: гейты вместо «окей», см. CLAUDE.md).
    - ⚠️ Мерж в `main` **авто-деплоит на прод** (`deploy-prod.yml`, Бокс Сабантуя) со смоуком #011. После мержа проверить, что смоук зелёный.
@@ -88,4 +88,4 @@ cd ../brain_matrica && git status --short && cd -   # чисто
 - ❌ Авто-мерж PR без явного **OK на diff**.
 - ❌ Писать/коммитить в `../brain_matrica/`.
 - ❌ Оставлять незапушенные ветки/коммиты или висящий `git stash`.
-- ❌ Поднимать Node-процессы для этого сайта на боксе — стадия 1 это чистая статика под nginx.
+- ❌ Поднимать на боксе **лишние** Node-процессы: у сайта ровно один сервис `rmz` (:3002, `MemoryMax=512M`) — третий жилец рядом с `sabantuy` (:3000) и `kazanskaya` (:3001) на 1.5 ГиБ без swap.
