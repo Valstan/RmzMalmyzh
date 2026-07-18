@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import ContactForm from "@/components/ContactForm";
 import ContentHtml from "@/components/ContentHtml";
 import { getAllPages, getPage } from "@/lib/cms";
 import type { Page } from "@/payload-types";
@@ -109,6 +110,15 @@ export default async function ContentPage({ params }: Props) {
         </p>
       )}
       <ContentHtml html={page.html ?? ""} formSubject={`Заявка со страницы: ${page.h1}`} />
+      {/* Кнопка «Сделать заказ» шапки ведёт на /kontakty/#zakaz — форма здесь
+          гарантирована кодом: в харвесте стадии 1 CF7-слотов не оказалось,
+          и без этого блока формы не было бы нигде на сайте. */}
+      {slug === "/kontakty/" && (
+        <section id="zakaz" className="mt-10">
+          <h2 className="text-2xl font-bold mb-4">Сделать заказ</h2>
+          <ContactForm subject="Заявка со страницы: Контакты" />
+        </section>
+      )}
     </div>
   );
 }
