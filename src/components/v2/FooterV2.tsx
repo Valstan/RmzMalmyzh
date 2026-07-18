@@ -30,7 +30,7 @@ export default function FooterV2() {
             <li><Link href="/new/#process" className="hover:text-[var(--v2-accent)]">Как мы ремонтируем</Link></li>
             <li><Link href="/new/#zayavka" className="hover:text-[var(--v2-accent)]">Заявка на ремонт</Link></li>
             <li><Link href="/zakupki/" className="hover:text-[var(--v2-accent)]">Закупки</Link></li>
-            <li><Link href="/vakansii/" className="hover:text-[var(--v2-accent)]">Вакансии</Link></li>
+            <li><Link href="/new/vakansii/" className="hover:text-[var(--v2-accent)]">Вакансии и анкета соискателя</Link></li>
             <li><Link href="/" className="text-[var(--v2-muted)] hover:text-white">← Текущая версия сайта</Link></li>
           </ul>
         </div>
