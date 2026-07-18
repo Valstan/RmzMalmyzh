@@ -56,6 +56,20 @@ jobs:
           echo | timeout 20 openssl s_client -connect "$D:443" -servername "$D" 2>/dev/null | openssl x509 -noout -subject -dates 2>/dev/null || echo "s_client FAIL"
           REMOTE
 
+      - name: Mail diagnostics (journal + env)
+        run: |
+          ssh rmz 'sudo bash -s' <<'REMOTE'
+          echo "== SMTP-строки в /etc/rmz/rmz.env (значения скрыты) =="
+          grep -E '^(SMTP_|SMARTCAPTCHA_)' /etc/rmz/rmz.env | sed 's/=.*/=***/' || echo "нет строк"
+          echo "== env процесса rmz (дошли ли переменные до Node) =="
+          MAINPID=$(systemctl show -p MainPID --value rmz)
+          sudo cat "/proc/$MAINPID/environ" 2>/dev/null | tr '\0' '\n' | grep -E '^(SMTP_|SMARTCAPTCHA_)' | sed 's/=.*/=***/' || echo "нет переменных в процессе"
+          echo "== журнал rmz: почта/заявки/анкеты (последние 100 строк) =="
+          journalctl -u rmz -n 400 --no-pager | grep -iE "smtp|email|mail|zayavka|rezyume|nodemailer|535|EAUTH|ECONN" | tail -100 || echo "совпадений нет"
+          echo "== последние 30 строк журнала как есть =="
+          journalctl -u rmz -n 30 --no-pager
+          REMOTE
+
       # Также с раннера (внешняя точка без DPI)
       - name: Probe from runner
         run: |
