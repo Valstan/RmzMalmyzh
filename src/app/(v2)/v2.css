@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+/* Дизайн-токены v2: индустриальный тёмный + фирменный красный завода.
+   Отдельный бандл от (frontend)/globals.css — v2 живёт своим стилем и
+   переезжает на корень без хвостов старой темы. */
+:root {
+  --v2-accent: #e31e24;
+  --v2-accent-dark: #b5181d;
+  --v2-ink: #12141a;
+  --v2-steel: #1b1f27;
+  --v2-steel-2: #252a35;
+  --v2-paper: #f5f6f8;
+  --v2-muted: #8b93a3;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--v2-ink);
+  color: #e8eaf0;
+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 { font-weight: 800; line-height: 1.15; letter-spacing: -0.01em; }
+
+.v2-container { max-width: 76rem; margin-inline: auto; padding-inline: 1rem; }
+
+.v2-btn {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  background: var(--v2-accent); color: #fff; font-weight: 700;
+  padding: 0.8rem 1.6rem; border-radius: 0.5rem;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+.v2-btn:hover { background: var(--v2-accent-dark); transform: translateY(-1px); }
+
+.v2-btn-ghost {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.25); color: #fff; font-weight: 600;
+  padding: 0.8rem 1.6rem; border-radius: 0.5rem;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.v2-btn-ghost:hover { border-color: #fff; background: rgba(255, 255, 255, 0.06); }
+
+.v2-card {
+  background: var(--v2-steel); border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 0.75rem; padding: 1.5rem;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.v2-card:hover { border-color: rgba(227, 30, 36, 0.55); transform: translateY(-2px); }
+
+.v2-chip {
+  display: inline-block; padding: 0.35rem 0.9rem; border-radius: 999px;
+  background: var(--v2-steel-2); border: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 0.85rem; color: #cdd3de;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.v2-chip:hover { border-color: var(--v2-accent); color: #fff; }
+
+.v2-label { color: var(--v2-accent); font-weight: 700; font-size: 0.8rem; letter-spacing: 0.14em; text-transform: uppercase; }
+
+.v2-form input, .v2-form textarea, .v2-form select {
+  width: 100%; background: var(--v2-steel-2); color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 0.5rem;
+  padding: 0.75rem 1rem; margin-bottom: 0.75rem; font-size: 1rem;
+}
+.v2-form input::placeholder, .v2-form textarea::placeholder { color: var(--v2-muted); }
+.v2-form input:focus, .v2-form textarea:focus, .v2-form select:focus {
+  outline: 2px solid var(--v2-accent); outline-offset: 0; border-color: transparent;
+}
