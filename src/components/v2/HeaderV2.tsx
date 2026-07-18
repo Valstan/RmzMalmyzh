@@ -8,6 +8,7 @@ const NAV_V2 = [
   { label: "Двигатели", href: "/new/dvigateli/" },
   { label: "Как мы ремонтируем", href: "/new/#process" },
   { label: "Услуги", href: "/new/#uslugi" },
+  { label: "Вакансии", href: "/new/vakansii/" },
   { label: "Новости", href: "/new/#novosti" },
   { label: "Вопросы", href: "/new/#faq" },
   { label: "Контакты", href: "/new/#kontakty" },
