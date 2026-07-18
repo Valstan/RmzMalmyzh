@@ -7,7 +7,8 @@ export default function robots(): MetadataRoute.Robots {
   return {
     // Аудит §3.2: явная политика для ИИ-краулеров — заводу НУЖНО попадать в ответы LLM
     rules: [
-      { userAgent: "*", allow: "/" },
+      // /new/ — превью нового интерфейса (v2), дубли контента в поиск не отдаём
+      { userAgent: "*", allow: "/", disallow: "/new/" },
       {
         userAgent: ["GPTBot", "ClaudeBot", "Claude-Web", "PerplexityBot", "YandexAdditional", "Google-Extended"],
         allow: "/",
