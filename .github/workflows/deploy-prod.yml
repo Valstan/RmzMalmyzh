@@ -23,6 +23,7 @@ on:
       - '.github/workflows/probe-prod.yml'
       - '.github/workflows/apply-authorize-key.yml'
       - '.github/workflows/setup-prod-stage2.yml'
+      - '.github/workflows/apply-form-secrets.yml'
   workflow_dispatch:
 
 concurrency:
@@ -103,6 +104,9 @@ jobs:
           PAYLOAD_SECRET: ci-build-only-secret-not-used-at-runtime
           NEXT_PUBLIC_SERVER_URL: ${{ vars.NEXT_PUBLIC_SITE_URL || 'http://127.0.0.1:3002' }}
           NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL || 'http://127.0.0.1:3002' }}
+          # Клиентский ключ SmartCaptcha — публичный, бейкается в бандл при сборке;
+          # серверный ключ едет в /etc/rmz/rmz.env через apply-form-secrets.yml
+          NEXT_PUBLIC_SMARTCAPTCHA_KEY: ${{ vars.NEXT_PUBLIC_SMARTCAPTCHA_KEY }}
           STANDALONE_BUILD: '1'
         run: pnpm build
 
