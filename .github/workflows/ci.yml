@@ -149,12 +149,24 @@ jobs:
           echo "жертва: id=$ID $VICTIM"
           rm -f "$MEDIA_DIR/$VICTIM"
           PHASE=media APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee heal.log
-          test -f "$MEDIA_DIR/$VICTIM" || { echo "::error::файл $VICTIM не восстановлен"; exit 1; }
           grep -qE 'восстановлено файлов [1-9]' heal.log || { echo "::error::в отчёте нет восстановленных файлов"; exit 1; }
+
+          # Инвариант — не имя файла, а: та же запись, без дублей, и на диске
+          # лежит файл под ТЕКУЩИМ именем записи. Имя Payload при перезаливке
+          # вправе изменить (getSafeFilename), и это безопасно: ссылки в контенте
+          # ведут на id, а роут читает filename из документа в момент запроса.
           AFTER=$(q "SELECT count(*) FROM media")
           [ "$AFTER" = "$BEFORE" ] || { echo "::error::было $BEFORE записей, стало $AFTER — восстановление наплодило дубли"; exit 1; }
-          NEWID=$(q "SELECT id FROM media WHERE filename = '$VICTIM'")
-          [ "$NEWID" = "$ID" ] || { echo "::error::id записи сменился ($ID → $NEWID) — ссылки в контенте сломались бы"; exit 1; }
+          NOW=$(q "SELECT filename FROM media WHERE id = $ID")
+          [ -n "$NOW" ] || { echo "::error::запись id=$ID исчезла"; exit 1; }
+          echo "имя до: $VICTIM"
+          echo "имя после: $NOW"
+          test -f "$MEDIA_DIR/$NOW" || {
+            echo "::error::файла нет ни под старым, ни под текущим именем записи"
+            find "$MEDIA_DIR" -maxdepth 1 -type f -name 'wp-2025-11-*' -printf '%f\n' | sort > /tmp/have.txt
+            head -5 /tmp/have.txt
+            exit 1
+          }
           echo "✅ файл восстановлен в ту же запись id=$ID, дублей нет"
 
       - name: Фаза links — перевод ссылок
