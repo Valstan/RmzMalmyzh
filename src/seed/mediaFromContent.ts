@@ -26,7 +26,14 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { getPayload } from 'payload'
 
-import { IMG_TAG_RE, LEGACY_IMG_RE, legacyPathToFilename, mediaUrl } from '../lib/mediaLegacy'
+import { MEDIA_STATIC_DIR } from '../collections/Media'
+import {
+  IMG_TAG_RE,
+  LEGACY_IMG_RE,
+  MEDIA_URL_RE,
+  legacyPathToFilename,
+  mediaUrl,
+} from '../lib/mediaLegacy'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const APPLY = process.env.APPLY === '1'
@@ -37,10 +44,16 @@ const APPLY = process.env.APPLY === '1'
  * ссылок и доставкой файлов на бокс есть окно, когда страницы ссылаются на ещё
  * не приехавший файл. Поэтому на проде: `media` → доставка файлов → `links`.
  * Локально и в CI фаза `both` (по умолчанию).
+ *
+ * Если запись есть, а файла в MEDIA_DIR нет (доставка упала), прогон осознанно
+ * падает: перезалить файл в ту же запись нельзя — Payload считает её собственное
+ * имя занятым и добавляет суффикс, из-за чего поиск по детерминированному имени
+ * перестаёт работать. Единственный путь восстановления — `PHASE=reset` (снос
+ * импортных wp-записей, отказывает, если контент уже переведён) и чистый повтор.
  */
-const PHASE = (process.env.PHASE || 'both') as 'media' | 'links' | 'both'
-if (!['media', 'links', 'both'].includes(PHASE)) {
-  console.error(`неизвестная PHASE=${PHASE}; ожидается media | links | both`)
+const PHASE = (process.env.PHASE || 'both') as 'media' | 'links' | 'both' | 'reset'
+if (!['media', 'links', 'both', 'reset'].includes(PHASE)) {
+  console.error(`неизвестная PHASE=${PHASE}; ожидается media | links | both | reset`)
   process.exit(1)
 }
 
@@ -94,6 +107,33 @@ for (const p of pages) {
   }
 }
 
+// 2a. PHASE=reset — откат половинчатого импорта: снести wp-записи и начать заново.
+//     Защита делает фазу безопасной навсегда: как только контент переведён на
+//     /media/, снос записей ломал бы живые ссылки, и reset отказывается работать.
+if (PHASE === 'reset') {
+  // Свежий RegExp на каждую страницу: у MEDIA_URL_RE флаг `g`, а .test() на
+  // глобальном регэкспе тащит lastIndex между вызовами и пропускал бы страницы.
+  const referencing = pages.filter(
+    (p) => typeof p.html === 'string' && new RegExp(MEDIA_URL_RE.source).test(p.html),
+  ).length
+  if (referencing > 0) {
+    log(`❌ отказ: ${referencing} страниц уже ссылаются на /media/ — снос записей сломал бы их.`)
+    log('   Если нужен откат уже переведённого контента — восстанавливайте pg_dump.')
+    process.exit(1)
+  }
+
+  const { docs: all } = await payload.find({ collection: 'media', pagination: false, depth: 0 })
+  const wp = all.filter((d) => typeof d.filename === 'string' && d.filename.startsWith('wp-'))
+  log(`записей media всего: ${all.length}, из них импортных (wp-): ${wp.length}`)
+  if (!APPLY) {
+    log('\nничего не удалено (dry-run). Повторить с APPLY=1.')
+    process.exit(0)
+  }
+  for (const d of wp) await payload.delete({ collection: 'media', id: d.id })
+  log(`✅ удалено ${wp.length} импортных записей; можно прогонять media заново`)
+  process.exit(0)
+}
+
 const legacyPaths = [...refCount.keys()]
 const totalRefs = [...refCount.values()].reduce((a, b) => a + b, 0)
 log(`legacy-ссылок: ${totalRefs} (уникальных путей ${legacyPaths.length})`)
@@ -108,6 +148,8 @@ const idByPath = new Map<string, { id: string | number; filename: string }>()
 let created = 0
 let reused = 0
 const problems: string[] = []
+/** Записи без файла на диске — состояние, из которого выход только через reset. */
+const broken: string[] = []
 
 for (const legacy of legacyPaths) {
   const filename = legacyPathToFilename(legacy)
@@ -124,7 +166,24 @@ for (const legacy of legacyPaths) {
   })
 
   if (docs[0]) {
-    idByPath.set(legacy, { id: docs[0].id, filename: docs[0].filename as string })
+    const existing = { id: docs[0].id, filename: docs[0].filename as string }
+    idByPath.set(legacy, existing)
+
+    // Запись есть, а файла в MEDIA_DIR нет — половинчатое состояние. Так вышло
+    // на проде 28.07: фаза media записала 180 документов, доставка файлов упала
+    // (на боксе нет rsync), staging раннера умер вместе с job.
+    //
+    // Починить перезаливкой в ту же запись нельзя: Payload считает собственное имя
+    // документа занятым и даёт файлу суффикс («…-110x80.jpg» → «…-110x80-1.jpg»,
+    // прогон 30353695657). Имя перестаёт совпадать с детерминированным, и поиск
+    // записи — линчпин всей идемпотентности — промахивается. Поэтому один честный
+    // путь восстановления: PHASE=reset и чистый повтор.
+    const onDisk = path.join(MEDIA_STATIC_DIR, path.basename(existing.filename))
+    if (!fs.existsSync(onDisk)) {
+      broken.push(`${legacy} → запись ${existing.id} (${existing.filename}), файла нет в MEDIA_DIR`)
+      continue
+    }
+
     reused += 1
     continue
   }
@@ -167,6 +226,18 @@ for (const legacy of legacyPaths) {
 }
 
 log(`media: ${APPLY ? 'создано' : 'к созданию'} ${created}, переиспользовано ${reused}`)
+
+if (broken.length > 0) {
+  log(`\n❌ записей без файла в MEDIA_DIR: ${broken.length}`)
+  for (const b of broken.slice(0, 5)) log(`  ${b}`)
+  if (broken.length > 5) log(`  … и ещё ${broken.length - 5}`)
+  log(
+    '\nЭто половинчатое состояние (записи есть, файлы не доехали).\n' +
+      'Лечение: PHASE=reset APPLY=1 — снесёт wp-записи (он откажется, если контент\n' +
+      'уже ссылается на /media/), затем обычный прогон media → доставка → links.',
+  )
+  process.exit(1)
+}
 if (!APPLY && created > 0) {
   const examples = [...idByPath.values()].filter((v) => v.id === 0).slice(0, 3)
   log(`  примеры имён: ${examples.map((e) => e.filename).join(', ')}${created > 3 ? ', …' : ''}`)

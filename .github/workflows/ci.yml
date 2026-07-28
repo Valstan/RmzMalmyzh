@@ -133,6 +133,44 @@ jobs:
           [ "$C" = "4" ] || { echo "::error::коллизии имён разъехались не полностью: найдено $C записей, ожидалось 4"; exit 1; }
           echo "✅ фаза media: ссылки не тронуты, имена по схеме, коллизии разведены"
 
+      # Регрессия на прод-аварию 28.07 (прогон 30351998453): фаза media записала
+      # 180 документов, доставка файлов упала (на боксе нет rsync), staging умер
+      # вместе с job. Повторный прогон обязан восстановить файл в ТУ ЖЕ запись —
+      # иначе фаза links увела бы ссылки на пустоту.
+      - name: Половинчатое состояние — прогон обязан упасть, reset обязан вылечить
+        run: |
+          set -eo pipefail
+          q() { docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_media -tAc "$1" | tr -d ' \r'; }
+          # Жертву берём из БД, а не через `ls | head`: head закрывает пайп раньше,
+          # ls получает write error и под pipefail роняет шаг.
+          VICTIM=$(q "SELECT filename FROM media ORDER BY id LIMIT 1")
+          echo "жертва: $VICTIM"
+          rm -f "$MEDIA_DIR/$VICTIM"
+
+          # 1. Запись есть, файла нет → падение с понятным диагнозом, а НЕ тихое
+          #    продолжение: иначе фаза links увела бы ссылки на пустоту.
+          set +e
+          PHASE=media APPLY=1 pnpm payload run src/seed/mediaFromContent.ts > half.log 2>&1
+          CODE=$?
+          set -e
+          tail -12 half.log
+          [ "$CODE" != "0" ] || { echo "::error::прогон с записью без файла обязан падать, а вернул 0"; exit 1; }
+          grep -q 'записей без файла в MEDIA_DIR' half.log || { echo "::error::нет диагноза про записи без файла"; exit 1; }
+
+          # 2. reset отказывается работать, если контент уже переведён (здесь ещё нет).
+          PHASE=reset APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee reset.log
+          LEFT=$(q "SELECT count(*) FROM media WHERE filename LIKE 'wp-%'")
+          [ "$LEFT" = "0" ] || { echo "::error::после reset осталось $LEFT импортных записей"; exit 1; }
+
+          # 3. Чистый повтор возвращает полный импорт.
+          PHASE=media APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee remedia.log
+          N=$(q "SELECT count(*) FROM media")
+          D=$(find public/images/wp -type f | wc -l | tr -d ' ')
+          [ "$N" = "$D" ] || { echo "::error::после повтора в media $N записей, ожидалось $D"; exit 1; }
+          BAD=$(q "SELECT count(*) FROM media WHERE filename NOT LIKE 'wp-%'")
+          [ "$BAD" = "0" ] || { echo "::error::повтор дал $BAD записей с именем не по схеме"; exit 1; }
+          echo "✅ падение с диагнозом, reset вылечил, повтор дал полный импорт без дрейфа имён"
+
       - name: Фаза links — перевод ссылок
         run: |
           set -eo pipefail
