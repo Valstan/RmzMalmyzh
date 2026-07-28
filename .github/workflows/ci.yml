@@ -52,6 +52,42 @@ jobs:
           PAYLOAD_SECRET: ci-build-only-secret-not-used-at-runtime
         run: pnpm build
 
+      # Регрессия на «час пустой главной после каждого деплоя»: deploy-prod собирает
+      # с пустой БД (прод не тянет build — G20), поэтому контентные страницы НЕ должны
+      # запекаться на сборке. Воспроизводим прод буквально: собрали на пустой базе,
+      # только теперь наполнили её, подняли сервер — и требуем контент в ответе.
+      # С `revalidate` вместо `dynamic = "force-dynamic"` этот шаг обязан краснеть.
+      - name: Контентные страницы рендерятся из БД, а не из пререндера
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rmz_build
+          PAYLOAD_SECRET: ci-build-only-secret-not-used-at-runtime
+        run: |
+          set -eo pipefail
+          pnpm payload run src/seed/seedFromStage1.ts
+          pnpm start -p 3000 > server.log 2>&1 &
+          for i in $(seq 1 40); do
+            curl -sf -o /dev/null http://127.0.0.1:3000/ && break
+            sleep 2
+          done
+
+          curl -sL http://127.0.0.1:3000/ -o home.html
+          grep -q 'prose-rmz' home.html || {
+            echo "::error::на главной нет контентного блока — отдаётся пререндер с пустой БД"
+            tail -30 server.log; exit 1; }
+
+          curl -sL http://127.0.0.1:3000/voprosy-i-otvety/ -o faq.html
+          grep -q '"@type":"Question"' faq.html || { echo "::error::в FAQ нет вопросов из БД"; exit 1; }
+
+          curl -sL http://127.0.0.1:3000/llms.txt -o llms.out
+          grep -q '/uslugi/' llms.out || { echo "::error::в llms.txt нет услуг из БД"; exit 1; }
+
+          curl -sL http://127.0.0.1:3000/sitemap.xml -o sitemap.out
+          N=$(grep -c '<loc>' sitemap.out || true)
+          echo "адресов в sitemap: $N"
+          [ "$N" -ge 100 ] || { echo "::error::в sitemap $N адресов — собран с пустой БД"; exit 1; }
+
+          echo "✅ главная, FAQ, llms.txt и sitemap берут контент из БД в рантайме"
+
   # Импорт харвест-картинок в коллекцию media (аудит §4.2) проверяется здесь и
   # только здесь: на dev-машине PC40 нет ни Postgres, ни Docker, а вторая живая
   # база — прод. Поэтому гейт скрипта, который будет править контент прода, —

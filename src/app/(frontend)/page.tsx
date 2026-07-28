@@ -2,7 +2,11 @@ import HeroSlider from "@/components/HeroSlider";
 import ContentHtml from "@/components/ContentHtml";
 import { getPage } from "@/lib/cms";
 
-export const revalidate = 3600;
+// Только рантайм: CI собирает с пустой БД, поэтому статический пререндер запёк бы
+// пустую страницу и отдавал её до первой ревалидации — час после каждого деплоя.
+// Вторая причина — ссылки /media/<id>/… привязаны к конкретной базе, так что
+// пререндер на сборочной БД был бы не устаревшим, а прямо неверным.
+export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
   const page = await getPage("/");

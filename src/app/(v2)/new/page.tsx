@@ -5,7 +5,11 @@ import { SITE } from "@/lib/site";
 import { ENGINE_GROUPS, OTHER_SERVICES, PROCESS_STEPS, V2_STATS } from "@/lib/v2/catalog";
 
 // Данные — из той же Payload-БД, что и основной сайт (новости, FAQ).
-export const revalidate = 3600;
+// Только рантайм: CI собирает с пустой БД, поэтому статический пререндер запёк бы
+// пустую страницу и отдавал её до первой ревалидации — час после каждого деплоя.
+// Вторая причина — ссылки /media/<id>/… привязаны к конкретной базе, так что
+// пререндер на сборочной БД был бы не устаревшим, а прямо неверным.
+export const dynamic = "force-dynamic";
 
 export default async function V2Home() {
   const [posts, faq] = await Promise.all([getPosts(), getFaq()]);
