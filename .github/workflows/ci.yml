@@ -133,6 +133,27 @@ jobs:
           [ "$C" = "4" ] || { echo "::error::коллизии имён разъехались не полностью: найдено $C записей, ожидалось 4"; exit 1; }
           echo "✅ фаза media: ссылки не тронуты, имена по схеме, коллизии разведены"
 
+      # Регрессия на прод-аварию 28.07 (прогон 30351998453): фаза media записала
+      # 180 документов, доставка файлов упала (на боксе нет rsync), staging умер
+      # вместе с job. Повторный прогон обязан восстановить файл в ТУ ЖЕ запись —
+      # иначе фаза links увела бы ссылки на пустоту.
+      - name: Само-починка — запись есть, файла нет
+        run: |
+          set -eo pipefail
+          q() { docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_media -tAc "$1" | tr -d ' \r'; }
+          BEFORE=$(q "SELECT count(*) FROM media")
+          VICTIM=$(ls "$MEDIA_DIR" | head -1)
+          ID=$(q "SELECT id FROM media WHERE filename = '$VICTIM'")
+          rm -f "$MEDIA_DIR/$VICTIM"
+          PHASE=media APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee heal.log
+          test -f "$MEDIA_DIR/$VICTIM" || { echo "::error::файл $VICTIM не восстановлен"; exit 1; }
+          grep -qE 'восстановлено файлов [1-9]' heal.log || { echo "::error::в отчёте нет восстановленных файлов"; exit 1; }
+          AFTER=$(q "SELECT count(*) FROM media")
+          [ "$AFTER" = "$BEFORE" ] || { echo "::error::было $BEFORE записей, стало $AFTER — восстановление наплодило дубли"; exit 1; }
+          NEWID=$(q "SELECT id FROM media WHERE filename = '$VICTIM'")
+          [ "$NEWID" = "$ID" ] || { echo "::error::id записи сменился ($ID → $NEWID) — ссылки в контенте сломались бы"; exit 1; }
+          echo "✅ файл восстановлен в ту же запись id=$ID, дублей нет"
+
       - name: Фаза links — перевод ссылок
         run: |
           set -eo pipefail

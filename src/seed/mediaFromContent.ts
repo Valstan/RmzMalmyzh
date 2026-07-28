@@ -26,6 +26,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { getPayload } from 'payload'
 
+import { MEDIA_STATIC_DIR } from '../collections/Media'
 import { IMG_TAG_RE, LEGACY_IMG_RE, legacyPathToFilename, mediaUrl } from '../lib/mediaLegacy'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -37,6 +38,12 @@ const APPLY = process.env.APPLY === '1'
  * ссылок и доставкой файлов на бокс есть окно, когда страницы ссылаются на ещё
  * не приехавший файл. Поэтому на проде: `media` → доставка файлов → `links`.
  * Локально и в CI фаза `both` (по умолчанию).
+ *
+ * Фаза `media` само-починяющаяся: если запись есть, а файла в MEDIA_DIR нет,
+ * файл перезаливается в ТУ ЖЕ запись (id сохраняется). Это делает прогон
+ * возобновляемым после сбоя доставки. ⚠️ Работает, пока в контенте ещё есть
+ * legacy-ссылки: список работы берётся из них. После завершённой миграции
+ * пропавший файл этим скриптом уже не восстановить.
  */
 const PHASE = (process.env.PHASE || 'both') as 'media' | 'links' | 'both'
 if (!['media', 'links', 'both'].includes(PHASE)) {
@@ -107,6 +114,7 @@ if (legacyPaths.length === 0) {
 const idByPath = new Map<string, { id: string | number; filename: string }>()
 let created = 0
 let reused = 0
+let restored = 0
 const problems: string[] = []
 
 for (const legacy of legacyPaths) {
@@ -124,7 +132,42 @@ for (const legacy of legacyPaths) {
   })
 
   if (docs[0]) {
-    idByPath.set(legacy, { id: docs[0].id, filename: docs[0].filename as string })
+    const existing = { id: docs[0].id, filename: docs[0].filename as string }
+    idByPath.set(legacy, existing)
+
+    // Запись есть, а файла в MEDIA_DIR нет — половинчатое состояние. Так вышло
+    // на проде 28.07: фаза media записала 180 документов, доставка файлов упала
+    // (на боксе нет rsync), staging раннера умер вместе с job. Повторный прогон
+    // без этой ветки нашёл бы записи, не создал файлов, и фаза links увела бы
+    // ссылки на пустоту. Перезаливаем файл в ТУ ЖЕ запись: id сохраняется (значит
+    // ссылки в контенте не ломаются), размеры-превью регенерируются.
+    const onDisk = path.join(MEDIA_STATIC_DIR, path.basename(existing.filename))
+    if (!fs.existsSync(onDisk)) {
+      const src = path.join(root, 'public', legacy)
+      if (!fs.existsSync(src)) {
+        problems.push(`${legacy} — нет ни файла в MEDIA_DIR, ни исходника ${src}`)
+        continue
+      }
+      if (PHASE === 'links') {
+        problems.push(`${legacy} — файла нет в MEDIA_DIR, а фаза links его не восстанавливает`)
+        continue
+      }
+      if (!APPLY) {
+        log(`  [dry-run] восстановил бы файл записи ${existing.id}: ${existing.filename}`)
+        restored += 1
+        continue
+      }
+      const data = fs.readFileSync(src)
+      await payload.update({
+        collection: 'media',
+        id: existing.id,
+        data: {},
+        file: { name: existing.filename, data, mimetype: mimeOf(existing.filename), size: data.length },
+      })
+      restored += 1
+      continue
+    }
+
     reused += 1
     continue
   }
@@ -166,7 +209,10 @@ for (const legacy of legacyPaths) {
   created += 1
 }
 
-log(`media: ${APPLY ? 'создано' : 'к созданию'} ${created}, переиспользовано ${reused}`)
+log(
+  `media: ${APPLY ? 'создано' : 'к созданию'} ${created}, переиспользовано ${reused}, ` +
+    `${APPLY ? 'восстановлено файлов' : 'к восстановлению файлов'} ${restored}`,
+)
 if (!APPLY && created > 0) {
   const examples = [...idByPath.values()].filter((v) => v.id === 0).slice(0, 3)
   log(`  примеры имён: ${examples.map((e) => e.filename).join(', ')}${created > 3 ? ', …' : ''}`)

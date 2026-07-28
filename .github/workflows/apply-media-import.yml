@@ -151,7 +151,11 @@ jobs:
           set -eo pipefail
           # shared/media — тот самый персистентный MEDIA_DIR, на который смотрит
           # симлинк public/media в релизе (G146).
-          rsync -az --info=stats1 -e "ssh" "$MEDIA_DIR"/ rmz:/home/valstan/rmz/shared/media/
+          #
+          # tar-over-ssh, а НЕ rsync: на боксе rsync не установлен (прогон 30351998453
+          # упал с «rsync: command not found», код 127 с удалённой стороны). tar там
+          # есть — на нём же держится доставка релиза в deploy-prod.
+          tar czf - -C "$MEDIA_DIR" . | ssh rmz 'mkdir -p /home/valstan/rmz/shared/media && tar xzf - -C /home/valstan/rmz/shared/media'
           N=$(ssh rmz 'find /home/valstan/rmz/shared/media -type f | wc -l')
           echo "файлов в shared/media на боксе: $N"
           [ "$N" -ge 180 ] || { echo "::error::на боксе $N файлов, ожидалось не меньше 180"; exit 1; }
