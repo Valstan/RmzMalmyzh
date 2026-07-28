@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { SITE } from "@/lib/site";
+import { ECOSYSTEM, SITE } from "@/lib/site";
 
 const NAV_V2 = [
   { label: "Двигатели", href: "/new/dvigateli/" },
@@ -38,6 +38,13 @@ export default function HeaderV2() {
         </nav>
 
         <div className="hidden items-center gap-4 lg:flex">
+          <a
+            href={ECOSYSTEM.servicesUrl}
+            title={`${ECOSYSTEM.servicesLabel} — каталог сайтов города`}
+            className="rounded border border-white/20 px-2 py-1 text-sm text-white/80 hover:border-white/50 hover:text-white"
+          >
+            🏛 {ECOSYSTEM.servicesLabel}
+          </a>
           <a href={`tel:${SITE.phonesHref[0]}`} className="text-sm font-bold text-white hover:text-[var(--v2-accent)]">
             {SITE.phones[0]}
           </a>
@@ -66,6 +73,13 @@ export default function HeaderV2() {
                 {i.label}
               </Link>
             ))}
+            <a
+              href={ECOSYSTEM.servicesUrl}
+              className="rounded px-2 py-2 font-medium text-white/85 hover:bg-white/5"
+              onClick={() => setOpen(false)}
+            >
+              🏛 {ECOSYSTEM.servicesLabel}
+            </a>
             <a href={`tel:${SITE.phonesHref[0]}`} className="rounded px-2 py-2 font-bold">
               {SITE.phones[0]}
             </a>
