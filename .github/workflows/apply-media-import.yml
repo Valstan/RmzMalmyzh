@@ -196,21 +196,24 @@ jobs:
           echo "главная: $code"
           [ "$code" = "200" ] || { echo "::error::главная вернула $code"; exit 1; }
 
-          # ⚠️ Никаких `grep -o … | head -1`: head закрывает пайп, grep получает
-          # SIGPIPE, и под pipefail шаг падает на ровном месте — именно так упал
-          # прогон 30355995887 уже ПОСЛЕ успешного применения. Берём один ответ в
-          # файл и разбираем его через sed -n 1p (пайп дочитывается до конца).
-          curl -s --max-time 20 "${H[@]}" 'http://127.0.0.1/api/media?limit=1&depth=0' -o /tmp/media.json
-          N=$(grep -o '"totalDocs":[0-9]*' /tmp/media.json | sed -n 1p | tr -cd '0-9')
-          echo "media в базе: $N"
-          [ -n "$N" ] && [ "$N" -ge 100 ] || { echo "::error::в media $N записей — импорт не доехал"; exit 1; }
+          # ⚠️ Два подвоха в одной строке, оба уже ронявшие этот шаг:
+          #  1) `-L` и слэш в `/api/media/`: при trailingSlash=true запрос без слэша
+          #     отдаёт 301, в теле нет totalDocs, grep не находит совпадений и под
+          #     set -e убивает шаг (прогоны 30355995887 и 30357600406);
+          #  2) никаких `grep -o … | head -1`: head закрывает пайп, grep получает
+          #     SIGPIPE и pipefail снова роняет шаг. Разбираем один файл через sed.
+          curl -sL --max-time 20 "${H[@]}" 'http://127.0.0.1/api/media/?limit=1&depth=0' -o /tmp/media.json
+          N=$(grep -o '"totalDocs":[0-9]*' /tmp/media.json | sed -n 1p | tr -cd '0-9' || true)
+          echo "media в базе: ${N:-—}"
+          [ -n "$N" ] || { echo "::error::/api/media не отдал totalDocs; начало ответа:"; head -c 300 /tmp/media.json; exit 1; }
+          [ "$N" -ge 100 ] || { echo "::error::в media $N записей — импорт не доехал"; exit 1; }
 
-          ID=$(grep -o '"id":[0-9]*' /tmp/media.json | sed -n 1p | tr -cd '0-9')
-          NAME=$(grep -o '"filename":"[^"]*"' /tmp/media.json | sed -n 1p | sed 's/.*:"//; s/"$//')
+          ID=$(grep -o '"id":[0-9]*' /tmp/media.json | sed -n 1p | tr -cd '0-9' || true)
+          NAME=$(grep -o '"filename":"[^"]*"' /tmp/media.json | sed -n 1p | sed 's/.*:"//; s/"$//' || true)
           [ -n "$ID" ] && [ -n "$NAME" ] || { echo "::error::не смог получить id/filename из /api/media"; exit 1; }
           IMG="/media/$ID/$NAME"
-          icode=$(curl -s -o /tmp/img.bin -w '%{http_code}' --max-time 20 "${H[@]}" "http://127.0.0.1$IMG")
-          itype=$(curl -s -o /dev/null -w '%{content_type}' --max-time 20 "${H[@]}" "http://127.0.0.1$IMG")
+          icode=$(curl -sL -o /tmp/img.bin -w '%{http_code}' --max-time 20 "${H[@]}" "http://127.0.0.1$IMG")
+          itype=$(curl -sL -o /dev/null -w '%{content_type}' --max-time 20 "${H[@]}" "http://127.0.0.1$IMG")
           isize=$(stat -c %s /tmp/img.bin)
           echo "картинка $IMG: $icode, $itype, $isize байт"
           [ "$icode" = "200" ] || { echo "::error::картинка вернула $icode"; exit 1; }
