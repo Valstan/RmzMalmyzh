@@ -137,37 +137,39 @@ jobs:
       # 180 документов, доставка файлов упала (на боксе нет rsync), staging умер
       # вместе с job. Повторный прогон обязан восстановить файл в ТУ ЖЕ запись —
       # иначе фаза links увела бы ссылки на пустоту.
-      - name: Само-починка — запись есть, файла нет
+      - name: Половинчатое состояние — прогон обязан упасть, reset обязан вылечить
         run: |
           set -eo pipefail
           q() { docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_media -tAc "$1" | tr -d ' \r'; }
-          BEFORE=$(q "SELECT count(*) FROM media")
           # Жертву берём из БД, а не через `ls | head`: head закрывает пайп раньше,
           # ls получает write error и под pipefail роняет шаг.
           VICTIM=$(q "SELECT filename FROM media ORDER BY id LIMIT 1")
-          ID=$(q "SELECT id FROM media ORDER BY id LIMIT 1")
-          echo "жертва: id=$ID $VICTIM"
+          echo "жертва: $VICTIM"
           rm -f "$MEDIA_DIR/$VICTIM"
-          PHASE=media APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee heal.log
-          grep -qE 'восстановлено файлов [1-9]' heal.log || { echo "::error::в отчёте нет восстановленных файлов"; exit 1; }
 
-          # Инвариант — не имя файла, а: та же запись, без дублей, и на диске
-          # лежит файл под ТЕКУЩИМ именем записи. Имя Payload при перезаливке
-          # вправе изменить (getSafeFilename), и это безопасно: ссылки в контенте
-          # ведут на id, а роут читает filename из документа в момент запроса.
-          AFTER=$(q "SELECT count(*) FROM media")
-          [ "$AFTER" = "$BEFORE" ] || { echo "::error::было $BEFORE записей, стало $AFTER — восстановление наплодило дубли"; exit 1; }
-          NOW=$(q "SELECT filename FROM media WHERE id = $ID")
-          [ -n "$NOW" ] || { echo "::error::запись id=$ID исчезла"; exit 1; }
-          echo "имя до: $VICTIM"
-          echo "имя после: $NOW"
-          test -f "$MEDIA_DIR/$NOW" || {
-            echo "::error::файла нет ни под старым, ни под текущим именем записи"
-            find "$MEDIA_DIR" -maxdepth 1 -type f -name 'wp-2025-11-*' -printf '%f\n' | sort > /tmp/have.txt
-            head -5 /tmp/have.txt
-            exit 1
-          }
-          echo "✅ файл восстановлен в ту же запись id=$ID, дублей нет"
+          # 1. Запись есть, файла нет → падение с понятным диагнозом, а НЕ тихое
+          #    продолжение: иначе фаза links увела бы ссылки на пустоту.
+          set +e
+          PHASE=media APPLY=1 pnpm payload run src/seed/mediaFromContent.ts > half.log 2>&1
+          CODE=$?
+          set -e
+          tail -12 half.log
+          [ "$CODE" != "0" ] || { echo "::error::прогон с записью без файла обязан падать, а вернул 0"; exit 1; }
+          grep -q 'записей без файла в MEDIA_DIR' half.log || { echo "::error::нет диагноза про записи без файла"; exit 1; }
+
+          # 2. reset отказывается работать, если контент уже переведён (здесь ещё нет).
+          PHASE=reset APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee reset.log
+          LEFT=$(q "SELECT count(*) FROM media WHERE filename LIKE 'wp-%'")
+          [ "$LEFT" = "0" ] || { echo "::error::после reset осталось $LEFT импортных записей"; exit 1; }
+
+          # 3. Чистый повтор возвращает полный импорт.
+          PHASE=media APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee remedia.log
+          N=$(q "SELECT count(*) FROM media")
+          D=$(find public/images/wp -type f | wc -l | tr -d ' ')
+          [ "$N" = "$D" ] || { echo "::error::после повтора в media $N записей, ожидалось $D"; exit 1; }
+          BAD=$(q "SELECT count(*) FROM media WHERE filename NOT LIKE 'wp-%'")
+          [ "$BAD" = "0" ] || { echo "::error::повтор дал $BAD записей с именем не по схеме"; exit 1; }
+          echo "✅ падение с диагнозом, reset вылечил, повтор дал полный импорт без дрейфа имён"
 
       - name: Фаза links — перевод ссылок
         run: |

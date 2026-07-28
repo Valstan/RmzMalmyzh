@@ -8,7 +8,8 @@
 # Как это работает. Прод-Postgres слушает только localhost бокса, а полный
 # toolchain (payload run + tsx) есть только на раннере — поэтому раннер поднимает
 # SSH-туннель к 5432 бокса и пишет в прод-БД через него. Файлы медиа скрипт
-# складывает в локальный staging и они едут на бокс отдельным rsync.
+# складывает в локальный staging, откуда они едут на бокс tar-over-ssh
+# (rsync на боксе не установлен).
 #
 # Порядок фаз важен: media (записи + файлы) → доставка файлов → links (ссылки).
 # Одним проходом было бы окно, где страницы уже ссылаются на не приехавший файл.
@@ -18,12 +19,12 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'dry-run — только отчёт, ничего не пишет; apply — применить'
+        description: 'dry-run — только отчёт; apply — применить; reset — снести импортные wp-записи (откат половинчатого импорта)'
         type: choice
-        options: [dry-run, apply]
+        options: [dry-run, apply, reset]
         default: dry-run
       confirm:
-        description: 'Для apply впишите слово ПРИМЕНИТЬ (защита от случайного запуска)'
+        description: 'Для apply и reset впишите слово ПРИМЕНИТЬ (защита от случайного запуска)'
         type: string
         default: ''
 
@@ -44,8 +45,8 @@ jobs:
         run: |
           set -e
           echo "режим: $APPLY_MODE"
-          if [ "$APPLY_MODE" = "apply" ] && [ "${{ inputs.confirm }}" != "ПРИМЕНИТЬ" ]; then
-            echo "::error::Для apply нужно вписать ПРИМЕНИТЬ в поле confirm"
+          if [ "$APPLY_MODE" != "dry-run" ] && [ "${{ inputs.confirm }}" != "ПРИМЕНИТЬ" ]; then
+            echo "::error::Для $APPLY_MODE нужно вписать ПРИМЕНИТЬ в поле confirm"
             exit 1
           fi
 
@@ -90,7 +91,7 @@ jobs:
           chmod 600 ~/.ssh/config
 
       - name: Бэкап прод-БД (pg_dump на боксе)
-        if: inputs.mode == 'apply'
+        if: inputs.mode != 'dry-run'
         run: |
           set -e
           ssh rmz 'sudo bash -s' "${{ github.run_id }}" <<'REMOTE'
@@ -129,7 +130,17 @@ jobs:
           (echo > /dev/tcp/127.0.0.1/15432) >/dev/null 2>&1 || { echo "::error::туннель не поднялся"; exit 1; }
           echo "✅ туннель на 127.0.0.1:15432 живой"
 
+      # Снос импортных wp-записей — выход из половинчатого состояния (записи есть,
+      # файлы не доехали). Сам скрипт откажется, если контент уже ссылается на
+      # /media/: тогда правильный откат — восстановить pg_dump.
+      - name: Reset — снести импортные записи media
+        if: inputs.mode == 'reset'
+        run: |
+          set -eo pipefail
+          PHASE=reset APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee reset.log
+
       - name: Отчёт (dry-run по прод-контенту)
+        if: inputs.mode != 'reset'
         run: |
           set -eo pipefail
           mkdir -p "$MEDIA_DIR"
