@@ -142,8 +142,11 @@ jobs:
           set -eo pipefail
           q() { docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_media -tAc "$1" | tr -d ' \r'; }
           BEFORE=$(q "SELECT count(*) FROM media")
-          VICTIM=$(ls "$MEDIA_DIR" | head -1)
-          ID=$(q "SELECT id FROM media WHERE filename = '$VICTIM'")
+          # Жертву берём из БД, а не через `ls | head`: head закрывает пайп раньше,
+          # ls получает write error и под pipefail роняет шаг.
+          VICTIM=$(q "SELECT filename FROM media ORDER BY id LIMIT 1")
+          ID=$(q "SELECT id FROM media ORDER BY id LIMIT 1")
+          echo "жертва: id=$ID $VICTIM"
           rm -f "$MEDIA_DIR/$VICTIM"
           PHASE=media APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee heal.log
           test -f "$MEDIA_DIR/$VICTIM" || { echo "::error::файл $VICTIM не восстановлен"; exit 1; }
