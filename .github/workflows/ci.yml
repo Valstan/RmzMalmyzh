@@ -51,3 +51,121 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rmz_build
           PAYLOAD_SECRET: ci-build-only-secret-not-used-at-runtime
         run: pnpm build
+
+  # Импорт харвест-картинок в коллекцию media (аудит §4.2) проверяется здесь и
+  # только здесь: на dev-машине PC40 нет ни Postgres, ни Docker, а вторая живая
+  # база — прод. Поэтому гейт скрипта, который будет править контент прода, —
+  # полный прогон на эфемерной БД: импорт → перевод ссылок → идемпотентность →
+  # живая выдача картинки через next start.
+  media:
+    name: media-import
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rmz_media
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rmz_media
+      PAYLOAD_SECRET: ci-media-only-secret-not-used-at-runtime
+      # Вне public/, чтобы файлы медиа не подменяли статику в сборке.
+      MEDIA_DIR: ${{ github.workspace }}/.media-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@v4
+        with:
+          path: public/images/wp
+          key: wp-images-${{ hashFiles('content/images-manifest.json') }}
+      - run: pnpm fetch-images
+      - name: Seed schema + контент стадии 1
+        run: |
+          mkdir -p "$MEDIA_DIR"
+          pnpm payload run src/seed/pushSchema.ts
+          pnpm payload run src/seed/seedFromStage1.ts
+
+      - name: Dry-run не должен ничего писать
+        run: |
+          # pipefail обязателен: без него tee вернул бы 0 при упавшем скрипте (G159).
+          set -eo pipefail
+          pnpm payload run src/seed/mediaFromContent.ts | tee dry.log
+          grep -q 'dry-run' dry.log || { echo "::error::dry-run не заявлен в выводе"; exit 1; }
+          N=$(docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_media -tAc "SELECT count(*) FROM media" | tr -d ' \r')
+          [ "$N" = "0" ] || { echo "::error::dry-run создал $N записей в media — должен был 0"; exit 1; }
+          L=$(docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_media -tAc "SELECT count(*) FROM pages WHERE html LIKE '%/images/wp/%'" | tr -d ' \r')
+          [ "$L" != "0" ] || { echo "::error::dry-run уже переписал контент"; exit 1; }
+          echo "✅ dry-run чист: media=0, страниц с legacy-ссылками=$L"
+
+      - name: Импорт + перевод ссылок
+        run: |
+          set -eo pipefail
+          APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee apply.log
+
+      - name: Проверки состояния БД и диска
+        run: |
+          set -e
+          q() { docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_media -tAc "$1" | tr -d ' \r'; }
+          MEDIA=$(q "SELECT count(*) FROM media")
+          # Только по html: имя колонки для ogImage зависит от snake_case-политики
+          # адаптера, а ogImage всё равно покрыт проверкой идемпотентности ниже —
+          # скрипт сканирует и его, и второй прогон обязан сказать «нечего».
+          LEGACY=$(q "SELECT count(*) FROM pages WHERE html LIKE '%/images/wp/%'")
+          ONMEDIA=$(q "SELECT count(*) FROM pages WHERE html LIKE '%/media/%'")
+          FILES=$(find "$MEDIA_DIR" -maxdepth 1 -type f | wc -l | tr -d ' ')
+          DISK=$(find public/images/wp -type f | wc -l | tr -d ' ')
+          echo "media=$MEDIA файлов_на_диске_харвеста=$DISK файлов_в_MEDIA_DIR=$FILES страниц_с_legacy=$LEGACY страниц_на_media=$ONMEDIA"
+          [ "$MEDIA" = "$DISK" ] || { echo "::error::в media $MEDIA записей, а файлов харвеста $DISK — импорт неполный"; exit 1; }
+          [ "$LEGACY" = "0" ] || { echo "::error::осталось $LEGACY страниц с ссылками на /images/wp/"; exit 1; }
+          [ "$ONMEDIA" != "0" ] || { echo "::error::ни одна страница не ссылается на /media/"; exit 1; }
+          [ "$FILES" -ge "$DISK" ] || { echo "::error::в MEDIA_DIR $FILES файлов, ожидалось не меньше $DISK"; exit 1; }
+          echo "✅ импорт полный, legacy-ссылок не осталось"
+
+      - name: Идемпотентность — второй прогон не должен найти работы
+        run: |
+          set -eo pipefail
+          APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee again.log
+          grep -q 'переводить нечего' again.log || { echo "::error::второй прогон нашёл работу — скрипт не идемпотентен"; exit 1; }
+          N=$(docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_media -tAc "SELECT count(*) FROM media" | tr -d ' ')
+          D=$(find public/images/wp -type f | wc -l | tr -d ' ')
+          [ "$N" = "$D" ] || { echo "::error::второй прогон наплодил дублей: media=$N, ожидалось $D"; exit 1; }
+          echo "✅ второй прогон — no-op, дублей нет"
+
+      - name: Build + живая выдача картинки
+        run: |
+          set -e
+          pnpm build
+          pnpm start -p 3000 > server.log 2>&1 &
+          for i in $(seq 1 40); do
+            curl -sf -o /dev/null http://127.0.0.1:3000/ && break
+            sleep 2
+          done
+          ID=$(docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_media -tAc "SELECT id FROM media ORDER BY id LIMIT 1" | tr -d ' \r')
+          NAME=$(docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_media -tAc "SELECT filename FROM media ORDER BY id LIMIT 1" | tr -d ' \r')
+          URL="http://127.0.0.1:3000/media/$ID/$NAME"
+          echo "== первый хоп (важно: 308 означал бы редирект на каждой картинке из-за trailingSlash) =="
+          curl -s -o /dev/null -w 'no-follow: %{http_code}\n' "$URL"
+          CODE=$(curl -sL -o body.bin -w '%{http_code}' "$URL")
+          TYPE=$(curl -sL -o /dev/null -w '%{content_type}' "$URL")
+          SIZE=$(wc -c < body.bin | tr -d ' ')
+          echo "follow: $CODE, type: $TYPE, bytes: $SIZE"
+          [ "$CODE" = "200" ] || { echo "::error::картинка отдалась с кодом $CODE"; tail -40 server.log; exit 1; }
+          case "$TYPE" in image/*) ;; *) echo "::error::Content-Type не image/*: $TYPE"; exit 1 ;; esac
+          [ "$SIZE" -gt 1000 ] || { echo "::error::тело картинки $SIZE байт — подозрительно мало"; exit 1; }
+          echo "== страница должна ссылаться на /media/ =="
+          curl -sL http://127.0.0.1:3000/ -o home.html
+          grep -q '/media/' home.html || { echo "::error::в HTML главной нет ссылок на /media/"; exit 1; }
+          echo "✅ картинка отдаётся из media, страницы ссылаются на неё"
