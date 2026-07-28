@@ -3,7 +3,11 @@ import { getAllPages } from "@/lib/cms";
 import { SITE } from "@/lib/site";
 
 // ISR вместо force-static: CI собирает с пустой БД, карта наполняется на проде.
-export const revalidate = 3600;
+// Только рантайм: CI собирает с пустой БД, поэтому статический пререндер запёк бы
+// пустую страницу и отдавал её до первой ревалидации — час после каждого деплоя.
+// Вторая причина — ссылки /media/<id>/… привязаны к конкретной базе, так что
+// пререндер на сборочной БД был бы не устаревшим, а прямо неверным.
+export const dynamic = "force-dynamic";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const pages = await getAllPages();
