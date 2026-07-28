@@ -15,6 +15,13 @@ export const SITE = {
   foundingYear: 1931,
 };
 
+/** Экосистема Малмыжа: каталог сервисов на ЕСА (постулат 37, SERVICE_ONBOARDING) */
+export const ECOSYSTEM = {
+  // вход.вмалмыже.рф/services — punycode обязателен (G133/G134)
+  servicesUrl: "https://xn--b1ae3a1a.xn--80adkdyec4j.xn--p1ai/services",
+  servicesLabel: "Сервисы Малмыжа",
+};
+
 export type NavItem = { label: string; href: string; children?: NavItem[] };
 
 export const NAV: NavItem[] = [

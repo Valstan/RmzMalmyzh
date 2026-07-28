@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { SITE } from "@/lib/site";
+import { ECOSYSTEM, SITE } from "@/lib/site";
 
 export default function FooterV2() {
   return (
@@ -31,6 +31,9 @@ export default function FooterV2() {
             <li><Link href="/new/#zayavka" className="hover:text-[var(--v2-accent)]">Заявка на ремонт</Link></li>
             <li><Link href="/zakupki/" className="hover:text-[var(--v2-accent)]">Закупки</Link></li>
             <li><Link href="/new/vakansii/" className="hover:text-[var(--v2-accent)]">Вакансии и анкета соискателя</Link></li>
+            <li>
+              <a href={ECOSYSTEM.servicesUrl} className="hover:text-[var(--v2-accent)]">🏛 {ECOSYSTEM.servicesLabel}</a>
+            </li>
             <li><Link href="/" className="text-[var(--v2-muted)] hover:text-white">← Текущая версия сайта</Link></li>
           </ul>
         </div>

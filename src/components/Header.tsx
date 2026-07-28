@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useState } from "react";
-import { NAV, SITE } from "@/lib/site";
+import { ECOSYSTEM, NAV, SITE } from "@/lib/site";
 
 export default function Header() {
   const [open, setOpen] = useState(false);
@@ -13,7 +13,15 @@ export default function Header() {
       {/* верхняя полоса с контактами — как на rmz43.ru */}
       <div className="bg-neutral-800 text-neutral-200 text-sm">
         <div className="mx-auto max-w-6xl px-4 py-1.5 flex flex-wrap gap-x-6 gap-y-1 justify-between">
-          <span>Работаем со всеми регионами России</span>
+          <span className="flex flex-wrap items-center gap-x-4">
+            <span>Работаем со всеми регионами России</span>
+            <a
+              href={ECOSYSTEM.servicesUrl}
+              className="rounded border border-neutral-600 px-2 py-0.5 hover:border-white hover:text-white"
+            >
+              🏛 {ECOSYSTEM.servicesLabel}
+            </a>
+          </span>
           <span className="flex flex-wrap gap-x-4">
             <a href={`tel:${SITE.phonesHref[0]}`} className="hover:text-white">{SITE.phones[0]}</a>
             <a href={`mailto:${SITE.emails.sales}`} className="hover:text-white">{SITE.emails.sales}</a>
@@ -90,6 +98,11 @@ export default function Header() {
                 )}
               </li>
             ))}
+            <li className="border-b border-neutral-100">
+              <a href={ECOSYSTEM.servicesUrl} className="block py-3 font-bold" onClick={() => setOpen(false)}>
+                🏛 {ECOSYSTEM.servicesLabel}
+              </a>
+            </li>
             <li className="py-3">
               <Link href="/kontakty/#zakaz" className="btn" onClick={() => setOpen(false)}>Сделать заказ</Link>
             </li>
