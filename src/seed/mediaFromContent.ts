@@ -31,10 +31,35 @@ import { IMG_TAG_RE, LEGACY_IMG_RE, legacyPathToFilename, mediaUrl } from '../li
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const APPLY = process.env.APPLY === '1'
 
+/**
+ * Фазы нужны для прода: файлы медиа пишутся туда, где запущен скрипт, а на боксе
+ * MEDIA_DIR свой. Если импорт и перевод ссылок идут одним проходом, между записью
+ * ссылок и доставкой файлов на бокс есть окно, когда страницы ссылаются на ещё
+ * не приехавший файл. Поэтому на проде: `media` → доставка файлов → `links`.
+ * Локально и в CI фаза `both` (по умолчанию).
+ */
+const PHASE = (process.env.PHASE || 'both') as 'media' | 'links' | 'both'
+if (!['media', 'links', 'both'].includes(PHASE)) {
+  console.error(`неизвестная PHASE=${PHASE}; ожидается media | links | both`)
+  process.exit(1)
+}
+
+const MIME: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+}
+const mimeOf = (name: string) => MIME[path.extname(name).toLowerCase()] || 'application/octet-stream'
+
 const payload = await getPayload({ config })
 const log = (s: string) => console.log(s)
 
-log(APPLY ? '=== РЕЖИМ: применяю изменения ===' : '=== РЕЖИМ: dry-run (ничего не пишу) ===')
+log(
+  `=== ФАЗА: ${PHASE} · РЕЖИМ: ${APPLY ? 'применяю изменения' : 'dry-run (ничего не пишу)'} ===`,
+)
 
 // 1. Контент как он есть на этой базе — источник правды, а не content/pages.json:
 //    правки редактора в админке должны пережить импорт.
@@ -104,6 +129,14 @@ for (const legacy of legacyPaths) {
     continue
   }
 
+  if (PHASE === 'links') {
+    // Фаза перевода ссылок идёт после доставки файлов на бокс, значит все записи
+    // обязаны существовать. Отсутствие — не «пропустим», а сигнал, что фаза
+    // media не доработала: ссылку не трогаем и роняем прогон ниже.
+    problems.push(`${legacy} — записи в media нет, а фаза links её не создаёт`)
+    continue
+  }
+
   const filePath = path.join(root, 'public', legacy)
   if (!fs.existsSync(filePath)) {
     problems.push(`${legacy} — файла нет на диске (${filePath}), ссылку оставляю как есть`)
@@ -119,10 +152,15 @@ for (const legacy of legacyPaths) {
     continue
   }
 
+  // Имя задаём ЯВНО через `file`, а не через `filePath`: от filePath Payload
+  // взял бы basename (`3d6-350x250.jpg`), и тогда поиск по детерминированному
+  // имени на следующем прогоне не нашёл бы запись и наплодил дубли, а две
+  // коллизии базовых имён между месяцами разводились бы молчаливым суффиксом «-1».
+  const data = fs.readFileSync(filePath)
   const doc = await payload.create({
     collection: 'media',
     data: { alt: alts.get(legacy) || undefined },
-    filePath,
+    file: { name: filename, data, mimetype: mimeOf(filename), size: data.length },
   })
   idByPath.set(legacy, { id: doc.id, filename: doc.filename as string })
   created += 1
@@ -134,6 +172,20 @@ if (!APPLY && created > 0) {
   log(`  примеры имён: ${examples.map((e) => e.filename).join(', ')}${created > 3 ? ', …' : ''}`)
 }
 for (const p of problems) log(`  ⚠️ ${p}`)
+
+if (PHASE === 'links' && problems.length > 0) {
+  log(`\n❌ фаза links: ${problems.length} путей без записи в media — сначала прогоните PHASE=media`)
+  process.exit(1)
+}
+
+if (PHASE === 'media') {
+  log(
+    APPLY
+      ? '\n✅ фаза media завершена. Дальше: доставить файлы из MEDIA_DIR на бокс, затем PHASE=links.'
+      : '\nничего не записано (dry-run фазы media).',
+  )
+  process.exit(0)
+}
 
 // 4. Перевод ссылок. Длинные пути первыми: /…/3d6-350x250.jpg не должен пострадать
 //    от замены /…/3d6.jpg (у путей разные расширения, но порядок — дешёвая страховка).

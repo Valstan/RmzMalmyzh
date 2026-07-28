@@ -1,0 +1,205 @@
+# Перевод картинок контента прода в коллекцию media (аудит §4.2).
+#
+# Зачем отдельный воркфлоу, а не шаг деплоя: это одноразовая правка ПРОД-ДАННЫХ
+# (HTML 111 страниц), необратимая без бэкапа (#025). Поэтому dispatch, режим
+# dry-run по умолчанию, обязательное слово-подтверждение для apply и pg_dump
+# перед первой записью.
+#
+# Как это работает. Прод-Postgres слушает только localhost бокса, а полный
+# toolchain (payload run + tsx) есть только на раннере — поэтому раннер поднимает
+# SSH-туннель к 5432 бокса и пишет в прод-БД через него. Файлы медиа скрипт
+# складывает в локальный staging и они едут на бокс отдельным rsync.
+#
+# Порядок фаз важен: media (записи + файлы) → доставка файлов → links (ссылки).
+# Одним проходом было бы окно, где страницы уже ссылаются на не приехавший файл.
+name: Apply media import (prod)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'dry-run — только отчёт, ничего не пишет; apply — применить'
+        type: choice
+        options: [dry-run, apply]
+        default: dry-run
+      confirm:
+        description: 'Для apply впишите слово ПРИМЕНИТЬ (защита от случайного запуска)'
+        type: string
+        default: ''
+
+# Не пересекаться с авто-деплоем: он в это же время меняет current-релиз.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    env:
+      APPLY_MODE: ${{ inputs.mode }}
+      MEDIA_DIR: ${{ github.workspace }}/.media-staging
+      PAYLOAD_SECRET: not-used-for-db-only-script
+    steps:
+      - name: Гейт подтверждения
+        run: |
+          set -e
+          echo "режим: $APPLY_MODE"
+          if [ "$APPLY_MODE" = "apply" ] && [ "${{ inputs.confirm }}" != "ПРИМЕНИТЬ" ]; then
+            echo "::error::Для apply нужно вписать ПРИМЕНИТЬ в поле confirm"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@v4
+        with:
+          path: public/images/wp
+          key: wp-images-${{ hashFiles('content/images-manifest.json') }}
+      - run: pnpm fetch-images
+
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+        run: |
+          set -e
+          if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$DEPLOY_SSH_HOST" ] || [ -z "$DEPLOY_SSH_PORT" ]; then
+            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / vars.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519_rmz
+          chmod 600 ~/.ssh/id_ed25519_rmz
+          ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat > ~/.ssh/config <<CFG
+          Host rmz
+            HostName $DEPLOY_SSH_HOST
+            Port $DEPLOY_SSH_PORT
+            User valstan
+            IdentityFile ~/.ssh/id_ed25519_rmz
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+          CFG
+          chmod 600 ~/.ssh/config
+
+      - name: Бэкап прод-БД (pg_dump на боксе)
+        if: inputs.mode == 'apply'
+        run: |
+          set -e
+          ssh rmz 'sudo bash -s' "${{ github.run_id }}" <<'REMOTE'
+          set -e
+          RUN="$1"
+          DIR=/home/valstan/rmz/shared/backups
+          mkdir -p "$DIR"
+          OUT="$DIR/pre-media-$(date -u +%Y%m%dT%H%M%SZ)-run$RUN.sql.gz"
+          sudo -u postgres pg_dump rmz | gzip -9 > "$OUT"
+          chown valstan:valstan "$OUT"
+          ls -lh "$OUT"
+          SIZE=$(stat -c %s "$OUT")
+          [ "$SIZE" -gt 100000 ] || { echo "::error::бэкап $SIZE байт — подозрительно мало, останавливаюсь"; exit 1; }
+          echo "✅ бэкап: $OUT"
+          # Держим последние 10 бэкапов.
+          ls -1t "$DIR"/pre-media-*.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm -f
+          REMOTE
+
+      - name: Туннель к прод-Postgres
+        run: |
+          set -eo pipefail
+          # Пароль роли rmz_app лежит в env бокса (600/640 root) — читаем root-шеллом.
+          DB=$(ssh rmz "sudo grep '^DATABASE_URL=' /etc/rmz/rmz.env | sed 's/^DATABASE_URL=//'")
+          [ -n "$DB" ] || { echo "::error::DATABASE_URL не найден в /etc/rmz/rmz.env"; exit 1; }
+          # Тот же URL, но на локальный конец туннеля.
+          TUN=$(printf '%s' "$DB" | sed -E 's#@[^/:]+(:[0-9]+)?/#@127.0.0.1:15432/#')
+          case "$TUN" in *@127.0.0.1:15432/*) ;; *) echo "::error::не смог переписать хост в DATABASE_URL"; exit 1 ;; esac
+          echo "::add-mask::$DB"
+          echo "::add-mask::$TUN"
+          echo "DATABASE_URL=$TUN" >> "$GITHUB_ENV"
+          ssh -f -N -L 15432:127.0.0.1:5432 rmz
+          for i in $(seq 1 20); do
+            (echo > /dev/tcp/127.0.0.1/15432) >/dev/null 2>&1 && break
+            sleep 1
+          done
+          (echo > /dev/tcp/127.0.0.1/15432) >/dev/null 2>&1 || { echo "::error::туннель не поднялся"; exit 1; }
+          echo "✅ туннель на 127.0.0.1:15432 живой"
+
+      - name: Отчёт (dry-run по прод-контенту)
+        run: |
+          set -eo pipefail
+          mkdir -p "$MEDIA_DIR"
+          pnpm payload run src/seed/mediaFromContent.ts | tee report.log
+          echo
+          echo "Числа выше — по живому контенту прода. Ожидаемо на первом прогоне:"
+          echo "  страниц 128, legacy-ссылок 521, media к созданию 180, страниц к обновлению 111."
+
+      - name: Фаза media — записи в БД + файлы в staging
+        if: inputs.mode == 'apply'
+        run: |
+          set -eo pipefail
+          PHASE=media APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee media.log
+          echo "файлов в staging: $(find "$MEDIA_DIR" -type f | wc -l)"
+
+      - name: Доставка файлов на бокс (до перевода ссылок)
+        if: inputs.mode == 'apply'
+        run: |
+          set -eo pipefail
+          # shared/media — тот самый персистентный MEDIA_DIR, на который смотрит
+          # симлинк public/media в релизе (G146).
+          rsync -az --info=stats1 -e "ssh" "$MEDIA_DIR"/ rmz:/home/valstan/rmz/shared/media/
+          N=$(ssh rmz 'find /home/valstan/rmz/shared/media -type f | wc -l')
+          echo "файлов в shared/media на боксе: $N"
+          [ "$N" -ge 180 ] || { echo "::error::на боксе $N файлов, ожидалось не меньше 180"; exit 1; }
+
+      - name: Фаза links — перевод ссылок в контенте
+        if: inputs.mode == 'apply'
+        run: |
+          set -eo pipefail
+          PHASE=links APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee links.log
+
+      - name: Проверка прода (#011)
+        if: inputs.mode == 'apply'
+        run: |
+          set -eo pipefail
+          # Изнутри бокса: внешний curl раннер→myjino флейкает и даёт ложный красный (PR #20).
+          #
+          # Проверяем МАШИНЕРИЮ, а не HTML страниц: у страниц ISR revalidate=3600,
+          # а скрипт правит БД снаружи Next-рантайма, где safeRevalidate осознанно
+          # ничего не делает — значит новые ссылки появятся на страницах в течение
+          # часа. Простоя при этом нет: статика public/images/wp остаётся на месте,
+          # и закэшированные страницы продолжают показывать её.
+          ssh rmz 'bash -s' <<'REMOTE'
+          set -eo pipefail
+          D=xn--g1ajl.xn--80adkdyec4j.xn--p1ai
+          H=(-H "Host: $D" -H "X-Forwarded-Proto: https")
+          code=$(curl -s -o /tmp/home.html -w '%{http_code}' --max-time 20 "${H[@]}" http://127.0.0.1/)
+          echo "главная: $code"
+          [ "$code" = "200" ] || { echo "::error::главная вернула $code"; exit 1; }
+
+          N=$(curl -s --max-time 20 "${H[@]}" 'http://127.0.0.1/api/media?limit=1&depth=0' | grep -o '"totalDocs":[0-9]*' | head -1)
+          echo "media в базе: $N"
+          echo "$N" | grep -qE '"totalDocs":(1[0-9][0-9]|[2-9][0-9][0-9])' || {
+            echo "::error::в media меньше 100 записей — импорт не доехал"; exit 1; }
+
+          ID=$(curl -s --max-time 20 "${H[@]}" 'http://127.0.0.1/api/media?limit=1&depth=0' | grep -o '"id":[0-9]*' | head -1 | tr -d 'a-z":')
+          NAME=$(curl -s --max-time 20 "${H[@]}" 'http://127.0.0.1/api/media?limit=1&depth=0' | grep -o '"filename":"[^"]*"' | head -1 | sed 's/.*:"//; s/"$//')
+          [ -n "$ID" ] && [ -n "$NAME" ] || { echo "::error::не смог получить id/filename из /api/media"; exit 1; }
+          IMG="/media/$ID/$NAME"
+          icode=$(curl -s -o /tmp/img.bin -w '%{http_code}' --max-time 20 "${H[@]}" "http://127.0.0.1$IMG")
+          itype=$(curl -s -o /dev/null -w '%{content_type}' --max-time 20 "${H[@]}" "http://127.0.0.1$IMG")
+          isize=$(stat -c %s /tmp/img.bin)
+          echo "картинка $IMG: $icode, $itype, $isize байт"
+          [ "$icode" = "200" ] || { echo "::error::картинка вернула $icode"; exit 1; }
+          case "$itype" in image/*) ;; *) echo "::error::Content-Type не image/*: $itype"; exit 1 ;; esac
+          [ "$isize" -gt 1000 ] || { echo "::error::тело картинки $isize байт"; exit 1; }
+          echo "✅ прод отдаёт картинки из media; страницы перейдут на них в пределах часа (ISR 3600)"
+          REMOTE
+
+      - name: Закрыть туннель
+        if: always()
+        run: pkill -f 'ssh -f -N -L 15432' || true
