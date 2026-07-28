@@ -110,10 +110,33 @@ jobs:
           [ "$L" != "0" ] || { echo "::error::dry-run уже переписал контент"; exit 1; }
           echo "✅ dry-run чист: media=0, страниц с legacy-ссылками=$L"
 
-      - name: Импорт + перевод ссылок
+      # Фазы прогоняются раздельно — ровно так, как пойдёт на проде: сначала
+      # записи и файлы, затем (после доставки файлов на бокс) ссылки. Гоняем то,
+      # что поедет, а не упрощённый вариант.
+      - name: Фаза media — записи и файлы
         run: |
           set -eo pipefail
-          APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee apply.log
+          PHASE=media APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee media.log
+
+      - name: Фаза media не должна трогать ссылки
+        run: |
+          set -e
+          q() { docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_media -tAc "$1" | tr -d ' \r'; }
+          STILL=$(q "SELECT count(*) FROM pages WHERE html LIKE '%/images/wp/%'")
+          [ "$STILL" != "0" ] || { echo "::error::фаза media переписала контент — это работа фазы links"; exit 1; }
+          # Имя задаётся явно, а не берётся из basename: иначе поиск по
+          # детерминированному имени промахнётся и второй прогон наплодит дубли.
+          BAD=$(q "SELECT count(*) FROM media WHERE filename NOT LIKE 'wp-%'")
+          [ "$BAD" = "0" ] || { echo "::error::$BAD записей media с именем не по схеме wp-ГОД-МЕСЯЦ-…"; exit 1; }
+          # Две коллизии базовых имён между месяцами обязаны разъехаться по префиксу.
+          C=$(q "SELECT count(*) FROM media WHERE filename LIKE '%dd-6chn18-22.jpg' OR filename LIKE '%sudovoj_dvigatel_nvd-26.jpg'")
+          [ "$C" = "4" ] || { echo "::error::коллизии имён разъехались не полностью: найдено $C записей, ожидалось 4"; exit 1; }
+          echo "✅ фаза media: ссылки не тронуты, имена по схеме, коллизии разведены"
+
+      - name: Фаза links — перевод ссылок
+        run: |
+          set -eo pipefail
+          PHASE=links APPLY=1 pnpm payload run src/seed/mediaFromContent.ts | tee links.log
 
       - name: Проверки состояния БД и диска
         run: |
