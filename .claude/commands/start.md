@@ -2,7 +2,7 @@
 description: Старт сессии — синхра репо (#032) + mailbox-check от brain + чтение SESSION_HANDOFF + re-триаж PENDING (#033)
 ---
 
-Выполни старт сессии «RmzMalmyzh» строго по шагам (детали — в `CLAUDE.md` §📬 Mailbox check). Порядок жёсткий: **сначала синхронизация (шаги 1–2), потом чтение session-памяти (шаги 5–6)** — pool #032.
+Выполни старт сессии «RmzMalmyzh» строго по шагам (детали — в `AGENTS.md` §📬 Mailbox check). Порядок жёсткий: **сначала синхронизация (шаги 1–2), потом чтение session-памяти (шаги 5–6)** — pool #032.
 
 1. **Sync свой репо — ПЕРВЫМ:** `git fetch`; если working tree чист и есть отставание — `git checkout main && git pull --ff-only`. Незакоммиченное / не-ff — сообщи и не форсируй. Только после этого можно доверять `SESSION_HANDOFF`/`PENDING`.
 2. **Sync brain (read-only):** `cd ../brain_matrica && git pull --ff-only && cd -`. Если не ff — сообщи и не форсируй.

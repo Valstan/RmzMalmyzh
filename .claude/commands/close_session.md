@@ -31,7 +31,7 @@ gh pr list --state open
 Если `git status` непустой помимо handoff/доков:
 1. **Гейты** (если трогался код): `corepack pnpm lint && corepack pnpm typecheck && corepack pnpm build`. С стадии 2 сборка требует Postgres (`.env`, см. `.env.example`) — Payload лезет в БД на пререндере.
 2. **NUL-чек** (грабля харнесса): `git add -A && git diff --cached --stat` — любой исходник как `Bin` → вычистить NUL и пересохранить UTF-8 (см. `/obriv` шаг 3).
-3. Ветка `feat/ fix/ chore/ docs/ refactor/` → коммит → `git push -u origin <ветка>` → `gh pr create` → CI зелёный → **авто-мерж** `gh pr merge --squash --delete-branch` (mandate #027: гейты вместо «окей», см. CLAUDE.md).
+3. Ветка `feat/ fix/ chore/ docs/ refactor/` → коммит → `git push -u origin <ветка>` → `gh pr create` → CI зелёный → **авто-мерж** `gh pr merge --squash --delete-branch` (mandate #027: гейты вместо «окей», см. `AGENTS.md`).
    - ⚠️ Мерж в `main` **авто-деплоит на прод** (`deploy-prod.yml`, Бокс Сабантуя) со смоуком #011. После мержа проверить, что смоук зелёный.
    - ⚠️ С этой машины (PC40) SSH на бокс режется на banner exchange — вся диагностика прода только через Actions (`probe-prod.yml`).
 
