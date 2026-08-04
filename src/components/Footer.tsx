@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ECOSYSTEM, SITE } from "@/lib/site";
+import { AUTHOR, ECOSYSTEM, SITE } from "@/lib/site";
 
 export default function Footer() {
   return (
@@ -37,8 +37,14 @@ export default function Footer() {
         </div>
       </div>
       <div className="border-t border-neutral-700">
-        <div className="mx-auto max-w-6xl px-4 py-4 text-xs text-neutral-400">
-          © {new Date().getFullYear()} {SITE.name}
+        <div className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-4 text-xs text-neutral-400 sm:flex-row sm:items-center sm:justify-between">
+          <span>© {new Date().getFullYear()} {SITE.name}</span>
+          <span>
+            Сделано программистом{" "}
+            <a href={AUTHOR.portfolioUrl} rel="author" className="hover:text-white">
+              {AUTHOR.name}
+            </a>
+          </span>
         </div>
       </div>
     </footer>
