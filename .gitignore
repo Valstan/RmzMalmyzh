@@ -16,3 +16,8 @@ Thumbs.db
 .DS_Store
 
 .env
+
+# локальные настройки и кэши AI-агентов; общие команды/настройки остаются в Git
+.codex/
+.gemini/
+.claude/settings.local.json
