@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ECOSYSTEM, SITE } from "@/lib/site";
+import { AUTHOR, ECOSYSTEM, SITE } from "@/lib/site";
 
 export default function FooterV2() {
   return (
@@ -39,7 +39,13 @@ export default function FooterV2() {
         </div>
       </div>
       <div className="border-t border-white/10 py-5 text-center text-xs text-[var(--v2-muted)]">
-        © {new Date().getFullYear()} {SITE.name} · Предпросмотр нового сайта
+        <p>© {new Date().getFullYear()} {SITE.name} · Предпросмотр нового сайта</p>
+        <p className="mt-1">
+          Сделано программистом{" "}
+          <a href={AUTHOR.portfolioUrl} rel="author" className="hover:text-[var(--v2-accent)]">
+            {AUTHOR.name}
+          </a>
+        </p>
       </div>
     </footer>
   );

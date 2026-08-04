@@ -22,6 +22,13 @@ export const ECOSYSTEM = {
   servicesLabel: "Сервисы Малмыжа",
 };
 
+/** Подпись автора сайта (SERVICE_ONBOARDING, решение владельца 2026-08-01). */
+export const AUTHOR = {
+  name: "Валентин Савиных",
+  // валентин.вмалмыже.рф — исходящие URL храним строго в punycode (G133/G134)
+  portfolioUrl: "https://xn--80adkmnnb2b.xn--80adkdyec4j.xn--p1ai/",
+};
+
 export type NavItem = { label: string; href: string; children?: NavItem[] };
 
 export const NAV: NavItem[] = [
