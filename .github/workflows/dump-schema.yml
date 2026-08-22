@@ -1,0 +1,98 @@
+name: Dump schema (manual)
+
+# Снимок схемы Payload с ЭФЕМЕРНОЙ базы — заготовка для миграции.
+#
+# Зачем отдельный воркфлоу. На dev-машине PC40 нет ни Postgres, ни Docker, а вторая
+# живая база — прод. Значит DDL новых таблиц негде получить иначе как в CI: придумывать
+# его руками нельзя, ошибка в типе колонки или в имени внешнего ключа обнаружится уже
+# на проде.
+#
+# Как пользоваться: dispatch с ветки, где лежит новая коллекция → в логе будет
+# CREATE TABLE по каждой таблице, чьё имя совпало с фильтром → перенести в
+# src/migrations/<timestamp>.sql, обернув в BEGIN/COMMIT и добавив IF NOT EXISTS.
+#
+# ⚠️ Почему не `payload migrate:create`: он даёт полную схему (законно — G192), но
+# применить её на проде нельзя, там таблицы уже есть. Нужны только новые.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tables:
+        description: 'Регулярка имён таблиц для выборки (grep -E), например: novosti|rubriki'
+        required: true
+        default: 'novosti|rubriki'
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rmz_schema
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rmz_schema
+      PAYLOAD_SECRET: ci-schema-only-secret-not-used-at-runtime
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Создать схему на пустой базе
+        run: pnpm payload run src/seed/pushSchema.ts
+
+      - name: Снять DDL выбранных таблиц
+        env:
+          FILTER: ${{ inputs.tables }}
+        run: |
+          set -eo pipefail
+          echo "== все таблицы базы =="
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_schema -tAc \
+            "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename"
+
+          echo
+          echo "== таблицы, попавшие под фильтр '$FILTER' =="
+          MATCHED=$(docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_schema -tAc \
+            "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename" \
+            | tr -d '\r' | grep -E "$FILTER" || true)
+          if [ -z "$MATCHED" ]; then
+            echo "::error::под фильтр '$FILTER' не попала ни одна таблица — опечатка в регулярке или коллекция не зарегистрирована в payload.config"
+            exit 1
+          fi
+          echo "$MATCHED"
+
+          # pg_dump с -t по каждой таблице: так в выводе только нужные CREATE,
+          # без шума остальной схемы.
+          ARGS=""
+          for T in $MATCHED; do ARGS="$ARGS -t public.$T"; done
+
+          echo
+          echo "======== DDL (переносить в src/migrations/<ts>.sql) ========"
+          docker exec ${{ job.services.postgres.id }} pg_dump -U postgres -d rmz_schema \
+            --schema-only --no-owner --no-privileges $ARGS
+
+          echo
+          echo "======== внешние ключи НА эти таблицы из уже существующих ========"
+          # Отдельно: ссылки из старых таблиц в новые пришлось бы добавлять ALTER'ом,
+          # и их легко не заметить в общем дампе.
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_schema -c \
+            "SELECT conrelid::regclass AS from_table, conname, pg_get_constraintdef(oid) AS def
+               FROM pg_constraint
+              WHERE contype='f'
+                AND confrelid::regclass::text ~ '$FILTER'
+                AND conrelid::regclass::text !~ '$FILTER'
+              ORDER BY 1;"
