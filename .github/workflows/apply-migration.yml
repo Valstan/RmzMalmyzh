@@ -1,0 +1,213 @@
+# Применение миграции схемы к ПРОД-БАЗЕ (#017, guard в deploy-prod.yml).
+#
+# Зачем отдельный воркфлоу. Это необратимая правка прод-схемы (#025): dispatch,
+# dry-run по умолчанию, обязательное слово-подтверждение и pg_dump до первой записи.
+#
+# ⚠️ ПОЧЕМУ НЕ `payload migrate`. Схема прода родилась не миграцией, а через
+# pushSchema → pg_dump → restore (setup-prod-stage2.yml). После pushSchema Payload
+# пишет в payload_migrations строку `dev` с batch = -1, и штатный `migrate`, увидев
+# её, задаёт ИНТЕРАКТИВНЫЙ вопрос про потерю данных. На раннере без TTY он на этом
+# вопросе тихо выходит с кодом 0, не применив ничего — «зелёный прогон» означал бы
+# «не сделано». Поэтому применяем сырой .sql через psql -v ON_ERROR_STOP=1.
+#
+# ⚠️ ПОЧЕМУ ПОД РОЛЬЮ ПРИЛОЖЕНИЯ, А НЕ ПОД postgres. Существующие таблицы прода
+# принадлежат rmz_app: восстановление шло `psql "$DATABASE_URL"` (setup-prod-stage2.yml).
+# Применишь DDL под postgres — новые таблицы достанутся ему, а приложение получит
+# permission denied уже в рантайме, на живом сайте. Поэтому DATABASE_URL читается
+# из /etc/rmz/rmz.env root-шеллом и psql запускается именно под ним.
+#
+# DRY-RUN ЗДЕСЬ НАСТОЯЩИЙ: миграция выполняется на проде в транзакции и
+# откатывается ROLLBACK'ом. DDL в Postgres транзакционен, поэтому такая репетиция
+# ловит и синтаксис, и отсутствующий тип, и нехватку прав — но не оставляет следа.
+name: Apply migration (prod)
+
+on:
+  workflow_dispatch:
+    inputs:
+      file:
+        description: 'Имя файла в src/migrations/ (например 20260823_000001_novosti_rubriki.sql)'
+        type: string
+        required: true
+      mode:
+        description: 'dry-run — прогнать на проде и откатить; apply — применить'
+        type: choice
+        options: [dry-run, apply]
+        default: dry-run
+      confirm:
+        description: 'Для apply впишите слово ПРИМЕНИТЬ'
+        type: string
+        default: ''
+
+# Не пересекаться с авто-деплоем: он в это же время меняет current-релиз и
+# перезапускает сервис.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      MODE: ${{ inputs.mode }}
+      FILE: ${{ inputs.file }}
+    steps:
+      - name: Гейт подтверждения
+        run: |
+          set -e
+          echo "режим: $MODE, файл: $FILE"
+          if [ "$MODE" != "dry-run" ] && [ "${{ inputs.confirm }}" != "ПРИМЕНИТЬ" ]; then
+            echo "::error::Для apply нужно вписать ПРИМЕНИТЬ в поле confirm"
+            exit 1
+          fi
+          case "$FILE" in
+            */*|"") echo "::error::ожидается имя файла без пути"; exit 1 ;;
+            *.sql) ;;
+            *) echo "::error::ожидается .sql"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v5
+
+      - name: Подготовить два варианта: репетиция и применение
+        run: |
+          set -eo pipefail
+          SRC="src/migrations/$FILE"
+          [ -f "$SRC" ] || { echo "::error::нет файла $SRC"; exit 1; }
+
+          # Из исходника убираем его собственные BEGIN/COMMIT: границу транзакции
+          # задаём здесь, потому что для репетиции она обязана кончаться ROLLBACK'ом.
+          grep -vxE '(BEGIN|COMMIT);' "$SRC" > body.sql
+          { echo 'BEGIN;'; cat body.sql; echo 'ROLLBACK;'; } > rehearsal.sql
+          { echo 'BEGIN;'; cat body.sql; echo 'COMMIT;'; } > apply.sql
+
+          echo "строк в теле: $(wc -l < body.sql)"
+          echo "== что миграция создаёт =="
+          grep -oE 'CREATE (TABLE IF NOT EXISTS|UNIQUE INDEX IF NOT EXISTS|INDEX IF NOT EXISTS|SEQUENCE IF NOT EXISTS|TYPE) [a-z_.]*' body.sql \
+            | sed 's/IF NOT EXISTS //' | sort | uniq -c
+
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+        run: |
+          set -e
+          if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$DEPLOY_SSH_HOST" ] || [ -z "$DEPLOY_SSH_PORT" ]; then
+            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / vars.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519_rmz
+          chmod 600 ~/.ssh/id_ed25519_rmz
+          ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat > ~/.ssh/config <<CFG
+          Host rmz
+            HostName $DEPLOY_SSH_HOST
+            Port $DEPLOY_SSH_PORT
+            User valstan
+            IdentityFile ~/.ssh/id_ed25519_rmz
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+          CFG
+          chmod 600 ~/.ssh/config
+
+      - name: Снимок схемы ДО
+        run: |
+          set -eo pipefail
+          ssh rmz 'sudo bash -s' <<'REMOTE' > before.txt
+          set -e
+          DB=$(grep '^DATABASE_URL=' /etc/rmz/rmz.env | sed 's/^DATABASE_URL=//')
+          psql "$DB" -tAc "SELECT tablename || ' [' || tableowner || ']' FROM pg_tables WHERE schemaname='public' ORDER BY 1"
+          REMOTE
+          echo "таблиц до: $(wc -l < before.txt)"
+          cat before.txt
+
+      - name: Бэкап прод-БД (pg_dump на боксе)
+        if: inputs.mode == 'apply'
+        run: |
+          set -e
+          ssh rmz 'sudo bash -s' "${{ github.run_id }}" <<'REMOTE'
+          set -e
+          RUN="$1"
+          DIR=/home/valstan/rmz/shared/backups
+          mkdir -p "$DIR"
+          OUT="$DIR/pre-migration-$(date -u +%Y%m%dT%H%M%SZ)-run$RUN.sql.gz"
+          sudo -u postgres pg_dump rmz | gzip -9 > "$OUT"
+          chown valstan:valstan "$OUT"
+          ls -lh "$OUT"
+          SIZE=$(stat -c %s "$OUT")
+          [ "$SIZE" -gt 100000 ] || { echo "::error::бэкап $SIZE байт — подозрительно мало, останавливаюсь"; exit 1; }
+          echo "✅ бэкап: $OUT"
+          ls -1t "$DIR"/pre-migration-*.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm -f
+          REMOTE
+
+      - name: Прогон миграции
+        run: |
+          set -eo pipefail
+          if [ "$MODE" = "apply" ]; then RUNFILE=apply.sql; else RUNFILE=rehearsal.sql; fi
+          echo "выполняю $RUNFILE под ролью приложения"
+          scp -q "$RUNFILE" rmz:/tmp/rmz-migration.sql
+          ssh rmz 'sudo bash -s' <<'REMOTE'
+          set -eo pipefail
+          DB=$(grep '^DATABASE_URL=' /etc/rmz/rmz.env | sed 's/^DATABASE_URL=//')
+          # ON_ERROR_STOP обязателен: без него psql проглотит ошибку и вернёт 0.
+          psql "$DB" -v ON_ERROR_STOP=1 -f /tmp/rmz-migration.sql
+          rm -f /tmp/rmz-migration.sql
+          REMOTE
+          echo "✅ прогон завершился без ошибок"
+
+      - name: Снимок схемы ПОСЛЕ и проверка владельца
+        run: |
+          set -eo pipefail
+          ssh rmz 'sudo bash -s' <<'REMOTE' > after.txt
+          set -e
+          DB=$(grep '^DATABASE_URL=' /etc/rmz/rmz.env | sed 's/^DATABASE_URL=//')
+          psql "$DB" -tAc "SELECT tablename || ' [' || tableowner || ']' FROM pg_tables WHERE schemaname='public' ORDER BY 1"
+          REMOTE
+          echo "== дельта таблиц =="
+          diff before.txt after.txt || true
+
+          NEW=$(comm -13 <(sort before.txt) <(sort after.txt) || true)
+          if [ "$MODE" = "dry-run" ]; then
+            if [ -n "$NEW" ]; then
+              echo "::error::репетиция оставила следы в схеме — ROLLBACK не сработал:"
+              echo "$NEW"; exit 1
+            fi
+            echo "✅ репетиция прошла и не оставила следа: миграция выполнима на проде"
+          else
+            [ -n "$NEW" ] || { echo "::error::после apply новых таблиц не появилось"; exit 1; }
+            echo "новые таблицы:"; echo "$NEW"
+            # Владелец обязан совпасть с ролью приложения, иначе рантайм получит
+            # permission denied уже на живом сайте.
+            BAD=$(echo "$NEW" | grep -v '\[rmz_app\]' || true)
+            [ -z "$BAD" ] || { echo "::error::таблицы созданы не под ролью приложения:"; echo "$BAD"; exit 1; }
+            echo "✅ все новые таблицы принадлежат rmz_app"
+          fi
+
+      - name: Отметить миграцию в реестре Payload
+        if: inputs.mode == 'apply'
+        run: |
+          set -eo pipefail
+          ssh rmz 'sudo bash -s' "$FILE" <<'REMOTE'
+          set -eo pipefail
+          NAME="${1%.sql}"
+          DB=$(grep '^DATABASE_URL=' /etc/rmz/rmz.env | sed 's/^DATABASE_URL=//')
+          # Best-effort: реестр нужен, чтобы будущий migrate:create видел базу как
+          # мигрированную. Строку `dev` с batch=-1 от pushSchema НЕ трогаем — её
+          # удаление меняет поведение payload migrate и заслуживает отдельного решения.
+          psql "$DB" -v ON_ERROR_STOP=1 -c \
+            "INSERT INTO payload_migrations (name, batch, updated_at, created_at)
+             SELECT '$NAME', 1, now(), now()
+             WHERE NOT EXISTS (SELECT 1 FROM payload_migrations WHERE name = '$NAME');"
+          echo "== реестр миграций =="
+          psql "$DB" -c "SELECT name, batch FROM payload_migrations ORDER BY id"
+          REMOTE
+
+      - name: Итог
+        run: |
+          if [ "$MODE" = "dry-run" ]; then
+            echo "Репетиция пройдена. Для применения — запустить снова с mode=apply и словом ПРИМЕНИТЬ."
+          else
+            echo "Миграция применена. Теперь можно мержить код коллекций; деплой — через workflow_dispatch."
+          fi
