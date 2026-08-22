@@ -36,6 +36,20 @@ async function checkSmartCaptcha(token: string | undefined, ip: string): Promise
 
 const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '')
 
+/**
+ * Копия анкеты уходит на адрес ИЗ ТЕЛА ЗАПРОСА, поэтому адрес обязан быть
+ * ровно одним. nodemailer разбирает строку `a@b.ru, victim@example.com` как
+ * СПИСОК получателей — без этой проверки ящик завода рассылал бы письма с его
+ * же брендом куда угодно, причём с управляемым текстом (answers до 40×3000).
+ * Капча тут не защита: она ограничивает массовость, а не сам вектор.
+ *
+ * Проверка нарочно строгая — запятая, точка с запятой, пробел, угловые скобки
+ * и перевод строки запрещены классом символов. Адрес не прошёл — копию просто
+ * не шлём: анкета уже лежит в /admin, отклик не теряется.
+ */
+const isSingleEmail = (v: string) =>
+  v.length <= 254 && /^[^\s@,;<>"]+@[^\s@,;<>".]+(\.[^\s@,;<>".]+)*\.[a-zA-Z]{2,}$/.test(v)
+
 export async function POST(req: Request) {
   let body: Record<string, unknown>
   try {
@@ -94,7 +108,11 @@ export async function POST(req: Request) {
   } catch (e) {
     payload.logger.error(`[rezyume] письмо в приёмную не ушло: ${String(e)}`)
   }
-  if (email) {
+  // Флаг `copy` в ответе — чтобы поведение было наблюдаемо гейтом: без него
+  // «копия не ушла из-за кривого адреса» и «копия ушла» снаружи неразличимы.
+  let copy = false
+  if (email && isSingleEmail(email)) {
+    copy = true
     try {
       await payload.sendEmail({
         to: email,
@@ -108,7 +126,9 @@ export async function POST(req: Request) {
     } catch (e) {
       payload.logger.error(`[rezyume] копия соискателю не ушла: ${String(e)}`)
     }
+  } else if (email) {
+    payload.logger.warn(`[rezyume] копия не отправлена: адрес не прошёл проверку «ровно один адрес»`)
   }
 
-  return Response.json({ ok: true })
+  return Response.json({ ok: true, copy })
 }

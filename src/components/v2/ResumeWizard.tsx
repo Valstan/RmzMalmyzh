@@ -248,8 +248,15 @@ export default function ResumeWizard() {
   const isLast = step === steps.length; // экран отправки после всех вопросов
   const cur = steps[step];
 
+  // Контейнер капчи живёт ВНУТРИ ветки isLast, поэтому «← Назад» его
+  // размонтирует вместе с виджетом. Раньше эффект в этом случае не возвращал
+  // ничего (ранний `return` внутри `if (window.smartCaptcha)`), widgetId
+  // оставался ненулевым — и guard навсегда запрещал повторный рендер: соискатель
+  // возвращался на экран отправки без капчи, сервер отвечал 403, и анкета из
+  // одиннадцати шагов пропадала под сообщением «Не получилось отправить».
   useEffect(() => {
-    if (!isLast || !CAPTCHA_KEY || !captchaRef.current || widgetId.current !== null) return;
+    if (!isLast || !CAPTCHA_KEY) return;
+
     const render = () => {
       if (window.smartCaptcha && captchaRef.current && widgetId.current === null) {
         widgetId.current = window.smartCaptcha.render(captchaRef.current, {
@@ -258,15 +265,32 @@ export default function ResumeWizard() {
         });
       }
     };
+
     if (window.smartCaptcha) {
       render();
-      return;
+    } else {
+      const s = document.createElement("script");
+      s.src = "https://smartcaptcha.yandexcloud.net/captcha.js?render=onload";
+      s.async = true;
+      s.onload = render;
+      document.head.appendChild(s);
     }
-    const s = document.createElement("script");
-    s.src = "https://smartcaptcha.yandexcloud.net/captcha.js?render=onload";
-    s.async = true;
-    s.onload = render;
-    document.head.appendChild(s);
+
+    return () => {
+      if (widgetId.current !== null) {
+        // Контейнер к этому моменту уже мог быть удалён из DOM — reset по нему
+        // вправе бросить; нам важно лишь снять guard.
+        try {
+          window.smartCaptcha?.reset(widgetId.current);
+        } catch {
+          /* виджет уничтожен вместе с контейнером — это и есть штатный путь */
+        }
+        widgetId.current = null;
+      }
+      // Токен привязан к уничтоженному виджету: оставить его — значит отправить
+      // на сервер заведомо невалидный и получить 403 уже на новом виджете.
+      setSmartToken("");
+    };
   }, [isLast]);
 
   const go = (n: number) => {
