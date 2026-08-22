@@ -86,6 +86,22 @@ jobs:
           echo "адресов в sitemap: $N"
           [ "$N" -ge 100 ] || { echo "::error::в sitemap $N адресов — собран с пустой БД"; exit 1; }
 
+          # Регрессия на «контентные страницы уходят в мессенджеры без картинки
+          # и заголовка». В generateMetadata маршрута [...slug] стоял
+          # `openGraph: page.ogImage ? {...} : undefined` — а ключ со значением
+          # undefined в Next НЕ означает «оставить родительские теги»: он их
+          # обнуляет. Соседние маршруты (/novosti/, /voprosy-i-otvety/) ключ не
+          # указывают вовсе и теги наследуют — отсюда и разница, которая
+          # маскировала дефект. Замерено на проде 2026-08-22: у `/` пять og-тегов,
+          # у `/kontakty/` и `/uslugi/` — ноль.
+          curl -sL http://127.0.0.1:3000/kontakty/ -o og.html
+          for T in og:title og:description og:image og:type; do
+            grep -q "property=\"$T\"" og.html || {
+              echo "::error::на контентной странице нет $T — openGraph обнулён в generateMetadata"
+              grep -o 'property="og:[a-z:]*"' og.html | sort -u; exit 1; }
+          done
+          echo "✅ контентная страница из [...slug] несёт og-теги"
+
           echo "✅ главная, FAQ, llms.txt и sitemap берут контент из БД в рантайме"
 
   # Импорт харвест-картинок в коллекцию media (аудит §4.2) проверяется здесь и
