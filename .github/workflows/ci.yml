@@ -104,6 +104,72 @@ jobs:
 
           echo "✅ главная, FAQ, llms.txt и sitemap берут контент из БД в рантайме"
 
+          # ── Формы: единственный конверсионный путь завода ────────────────────
+          # До сих пор он не был покрыт ничем: и этот шаг, и смоук #011 состояли
+          # из одних GET, поэтому 500 на отправке заявки уехал бы на прод зелёным,
+          # а завод узнал бы об этом по телефонному звонку клиента. Сервер уже
+          # поднят и БД наполнена — добавляем только curl и psql.
+          # Капча в CI не мешает: SMARTCAPTCHA_SERVER_KEY не задан, и обе проверки
+          # в роутах в этом случае пропускают запрос.
+          zq() { docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_build -tAc "$1" | tr -d ' \r'; }
+
+          echo "== заявка: успешный POST =="
+          # Слэш обязателен, а -L здесь ЗАПРЕЩЁН: при trailingSlash: true запрос
+          # без слэша отдаёт 308, и curl -L повторил бы его уже без тела — то есть
+          # проверка зеленела бы на сломанном пути. Клиенты шлют со слэшем.
+          CODE=$(curl -s -o post.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"name":"CI смоук","contact":"+70000000000","message":"проверка гейта"}' \
+            http://127.0.0.1:3000/api/zayavka/)
+          echo "POST /api/zayavka/ → $CODE $(cat post.json)"
+          [ "$CODE" = "200" ] || { echo "::error::заявка не принята, код $CODE (308 = тело потеряно на редиректе trailingSlash)"; tail -40 server.log; exit 1; }
+          grep -q '"ok":true' post.json || { echo "::error::в ответе на заявку нет ok:true"; exit 1; }
+          Z=$(zq "SELECT count(*) FROM zayavki")
+          [ "$Z" = "1" ] || { echo "::error::в zayavki $Z записей, ожидалась 1 — заявка не сохранилась"; tail -40 server.log; exit 1; }
+
+          echo "== заявка: honeypot глушит бота, но не подаёт виду =="
+          curl -s -o /dev/null -X POST -H 'Content-Type: application/json' \
+            -d '{"name":"бот","contact":"бот","website":"http://spam.example"}' \
+            http://127.0.0.1:3000/api/zayavka/
+          Z=$(zq "SELECT count(*) FROM zayavki")
+          [ "$Z" = "1" ] || { echo "::error::honeypot пропустил запись бота: в zayavki $Z"; exit 1; }
+
+          echo "== заявка: без обязательного поля — 400 =="
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"contact":"+70000000000"}' http://127.0.0.1:3000/api/zayavka/)
+          [ "$CODE" = "400" ] || { echo "::error::заявка без имени принята с кодом $CODE"; exit 1; }
+
+          echo "== заявка: тело сверх потолка — 413 ДО разбора JSON =="
+          # nginx пропускает 25 МБ (лимит стоит ради загрузок в админку и накрывает
+          # /api/), а процесс делит MemoryMax=512M со всем сайтом. Капча проверяется
+          # после разбора тела и от этого не защищает.
+          python3 -c "import json;print(json.dumps({'name':'x','contact':'y','message':'A'*200000}))" > big.json
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            --data-binary @big.json http://127.0.0.1:3000/api/zayavka/)
+          [ "$CODE" = "413" ] || { echo "::error::тело на 200 КБ принято с кодом $CODE — потолок не работает"; exit 1; }
+
+          echo "== анкета соискателя: второй роут, своя ветка кода =="
+          CODE=$(curl -s -o rez.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"vacancy":"Токарь","name":"CI Соискатель","phone":"+70000000001","answers":[["Город:","Малмыж"]]}' \
+            http://127.0.0.1:3000/api/rezyume/)
+          [ "$CODE" = "200" ] || { echo "::error::анкета не принята, код $CODE"; tail -40 server.log; exit 1; }
+          S=$(zq "SELECT count(*) FROM zayavki WHERE subject LIKE 'Отклик на вакансию%'")
+          [ "$S" = "1" ] || { echo "::error::анкета не создала запись с subject «Отклик на вакансию…»"; exit 1; }
+
+          echo "== анкета: регрессия на открытую рассылку =="
+          # Адрес копии берётся из тела запроса, а nodemailer читает «a@b.ru, x@y.ru»
+          # как СПИСОК получателей: без проверки ящик завода рассылал бы письма с
+          # его же брендом куда угодно. Флаг copy в ответе делает отказ наблюдаемым.
+          curl -s -o relay.json -X POST -H 'Content-Type: application/json' \
+            -d '{"vacancy":"Токарь","name":"CI Релей","phone":"+70000000002","email":"a@b.ru, victim@example.com","answers":[]}' \
+            http://127.0.0.1:3000/api/rezyume/
+          grep -q '"copy":false' relay.json || { echo "::error::копия ушла бы на список адресов: $(cat relay.json)"; exit 1; }
+          curl -s -o copy.json -X POST -H 'Content-Type: application/json' \
+            -d '{"vacancy":"Токарь","name":"CI Копия","phone":"+70000000003","email":"one@example.com","answers":[]}' \
+            http://127.0.0.1:3000/api/rezyume/
+          grep -q '"copy":true' copy.json || { echo "::error::валидный одиночный адрес не прошёл проверку: $(cat copy.json)"; exit 1; }
+
+          echo "✅ формы: заявка и анкета пишутся в БД, honeypot глушит, 400 и 413 отдаются, рассылка на список адресов отвергнута"
+
   # Импорт харвест-картинок в коллекцию media (аудит §4.2) проверяется здесь и
   # только здесь: на dev-машине PC40 нет ни Postgres, ни Docker, а вторая живая
   # база — прод. Поэтому гейт скрипта, который будет править контент прода, —
