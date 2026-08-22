@@ -1,4 +1,5 @@
 import Link from "next/link";
+import MetrikaInformer from "@/components/MetrikaInformer";
 import { AUTHOR, ECOSYSTEM, SITE } from "@/lib/site";
 
 export default function Footer() {
@@ -39,11 +40,14 @@ export default function Footer() {
       <div className="border-t border-neutral-700">
         <div className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-4 text-xs text-neutral-400 sm:flex-row sm:items-center sm:justify-between">
           <span>© {new Date().getFullYear()} {SITE.name}</span>
-          <span>
-            Сделано программистом{" "}
-            <a href={AUTHOR.portfolioUrl} rel="author" className="hover:text-white">
-              {AUTHOR.name}
-            </a>
+          <span className="flex items-center gap-3">
+            <MetrikaInformer className="shrink-0" />
+            <span>
+              Сделано программистом{" "}
+              <a href={AUTHOR.portfolioUrl} rel="author" className="hover:text-white">
+                {AUTHOR.name}
+              </a>
+            </span>
           </span>
         </div>
       </div>
