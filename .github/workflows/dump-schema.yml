@@ -81,6 +81,19 @@ jobs:
           for T in $MATCHED; do ARGS="$ARGS -t public.$T"; done
 
           echo
+          echo "======== ТИПЫ (enum), на которые ссылаются таблицы ========"
+          # ⚠️ pg_dump -t НЕ выгружает типы: в дампе будет `source public.enum_novosti_source`,
+          # а самого CREATE TYPE не будет — и миграция упадёт на проде на отсутствующем enum.
+          # Наступили на это 2026-08-23, поэтому типы печатаются отдельно и всегда.
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -d rmz_schema -tAc             "SELECT 'CREATE TYPE public.' || t.typname || ' AS ENUM (' ||
+                    string_agg(quote_literal(e.enumlabel), ', ' ORDER BY e.enumsortorder) || ');'
+               FROM pg_type t
+               JOIN pg_enum e ON e.enumtypid = t.oid
+               JOIN pg_namespace n ON n.oid = t.typnamespace
+              WHERE n.nspname='public' AND t.typname ~ '$FILTER'
+              GROUP BY t.typname ORDER BY t.typname;"
+
+          echo
           echo "======== DDL (переносить в src/migrations/<ts>.sql) ========"
           docker exec ${{ job.services.postgres.id }} pg_dump -U postgres -d rmz_schema \
             --schema-only --no-owner --no-privileges $ARGS
