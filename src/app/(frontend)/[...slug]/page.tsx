@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import ContactForm from "@/components/ContactForm";
 import ContentHtml from "@/components/ContentHtml";
 import { getAllPages, getPage } from "@/lib/cms";
+import { OG_DEFAULT_IMAGE, SITE } from "@/lib/site";
 import type { Page } from "@/payload-types";
 
 type Props = { params: Promise<{ slug: string[] }> };
@@ -17,13 +18,29 @@ const slugOf = async (params: Props["params"]) => "/" + (await params).slug.join
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const page = await getPage(await slugOf(params));
   if (!page) return {};
+  const title = (page.title ?? page.h1).replace(/ [-—] АО «Малмыжский ремзавод»$/, "");
+  // Мусорные описания WP (типа «Звоните по телефону: tel:…» у /vakansii/) — на фолбэк (аудит §2.2)
+  const description = (page.desc && !/tel:\+?\d/.test(page.desc) ? page.desc : "") ||
+    `${page.h1} — АО «Малмыжский завод по ремонту дизельных двигателей», г. Малмыж. Работаем со всеми регионами России.`;
   return {
-    title: (page.title ?? page.h1).replace(/ [-—] АО «Малмыжский ремзавод»$/, ""),
-    // Мусорные описания WP (типа «Звоните по телефону: tel:…» у /vakansii/) — на фолбэк (аудит §2.2)
-    description: (page.desc && !/tel:\+?\d/.test(page.desc) ? page.desc : "") ||
-      `${page.h1} — АО «Малмыжский завод по ремонту дизельных двигателей», г. Малмыж. Работаем со всеми регионами России.`,
+    title,
+    description,
     alternates: { canonical: page.path },
-    openGraph: page.ogImage ? { images: [page.ogImage] } : undefined,
+    // ⚠️ Здесь стояло `openGraph: page.ogImage ? {...} : undefined`, и это стирало
+    // og-теги на 127 из 128 страниц: ключ со значением undefined Next понимает не
+    // как «оставь родительские», а как «обнули». Соседние маршруты (/novosti/,
+    // /voprosy-i-otvety/) ключ не указывают вовсе — и теги наследуют; именно эта
+    // разница дефект и маскировала. Поэтому объект собираем ЦЕЛИКОМ, повторяя
+    // поля из layout: глубже верхнего уровня openGraph с родительским не сливается.
+    openGraph: {
+      type: "website",
+      locale: "ru_RU",
+      siteName: SITE.shortName,
+      title,
+      description,
+      url: page.path,
+      images: [page.ogImage || OG_DEFAULT_IMAGE],
+    },
   };
 }
 

@@ -3,7 +3,7 @@ import "./globals.css";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import Metrika from "@/components/Metrika";
-import { SITE } from "@/lib/site";
+import { OG_DEFAULT_IMAGE, SITE } from "@/lib/site";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE.url),
@@ -19,7 +19,7 @@ export const metadata: Metadata = {
     type: "website",
     locale: "ru_RU",
     siteName: SITE.shortName,
-    images: ["/images/slides/slide-1.webp"],
+    images: [OG_DEFAULT_IMAGE],
   },
 };
 

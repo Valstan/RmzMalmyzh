@@ -15,6 +15,15 @@ export const SITE = {
   foundingYear: 1931,
 };
 
+/**
+ * Картинка для соцсетей по умолчанию — для страниц, у которых своей нет.
+ * Держим константой, потому что её обязаны знать оба места: layout и
+ * generateMetadata маршрута [...slug]. Причина — в Next `openGraph` НЕ
+ * сливается с родительским глубже верхнего уровня: страница, задавшая свой
+ * openGraph, обязана перечислить все поля заново, иначе они пропадут.
+ */
+export const OG_DEFAULT_IMAGE = "/images/slides/slide-1.webp";
+
 /** Экосистема Малмыжа: каталог сервисов на ЕСА (постулат 37, SERVICE_ONBOARDING) */
 export const ECOSYSTEM = {
   // вход.вмалмыже.рф/services — punycode обязателен (G133/G134)
