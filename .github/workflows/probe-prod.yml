@@ -70,6 +70,30 @@ jobs:
           journalctl -u rmz -n 30 --no-pager
           REMOTE
 
+      # Профилактика G234 (письмо brain 2026-08-08): гонка keep-alive между
+      # idle-таймаутом пула nginx и `server.keepAliveTimeout` Node даёт 502 на
+      # случайной позиции серии POST при пустых логах приложения. Таймаут задаётся
+      # В КОДЕ/окружении, а не в конфиге nginx, поэтому обычный аудит инфры его не
+      # видит — и наоборот: если у nginx нет upstream-пула с `keepalive`, гонки нет
+      # вовсе. Замеряем обе половины, ничего не меняя.
+      - name: Keep-alive и SIGTERM — замер (read-only)
+        run: |
+          ssh rmz 'sudo bash -s' <<'REMOTE'
+          echo "== есть ли у nginx upstream-пул с keepalive (без него гонки G234 нет) =="
+          grep -rn "upstream\|keepalive\|proxy_http_version\|proxy_set_header Connection" \
+            /etc/nginx/nginx.conf /etc/nginx/conf.d/ 2>/dev/null || echo "совпадений нет"
+          echo "== keepalive_timeout самого nginx (клиентская сторона) =="
+          nginx -T 2>/dev/null | grep -E "^\s*keepalive(_timeout|_requests)?\s" | sort -u || echo "не задан явно"
+          echo "== KEEP_ALIVE_TIMEOUT в окружении процесса rmz (Next standalone читает его) =="
+          MAINPID=$(systemctl show -p MainPID --value rmz)
+          tr '\0' '\n' < "/proc/$MAINPID/environ" 2>/dev/null | grep -E '^(KEEP_ALIVE_TIMEOUT|NODE_OPTIONS|NEXT_MANUAL_SIG_HANDLE)=' \
+            || echo "KEEP_ALIVE_TIMEOUT не задан → Node держит дефолт 5 секунд"
+          echo "== фактические таймауты живого сервера, снятые с процесса =="
+          echo "(если keepAliveTimeout=5000 при пуле nginx с keepalive — это красный G234)"
+          echo "== KillSignal/TimeoutStopSec юнита: успевает ли дренаж =="
+          systemctl show rmz -p KillSignal -p TimeoutStopUSec -p KillMode -p Restart
+          REMOTE
+
       # Также с раннера (внешняя точка без DPI)
       - name: Probe from runner
         run: |
