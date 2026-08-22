@@ -21,6 +21,7 @@ on:
       - '**.md'
       - '.claude/**'
       - '.github/workflows/probe-prod.yml'
+      - '.github/workflows/dump-schema.yml'
       - '.github/workflows/apply-authorize-key.yml'
       - '.github/workflows/setup-prod-stage2.yml'
       - '.github/workflows/apply-form-secrets.yml'
