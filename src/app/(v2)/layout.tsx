@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./v2.css";
 import HeaderV2 from "@/components/v2/HeaderV2";
 import FooterV2 from "@/components/v2/FooterV2";
+import Metrika from "@/components/Metrika";
 import { SITE } from "@/lib/site";
 
 /**
@@ -29,6 +30,7 @@ export default function V2Layout({ children }: { children: React.ReactNode }) {
         <HeaderV2 />
         <main>{children}</main>
         <FooterV2 />
+        <Metrika />
       </body>
     </html>
   );

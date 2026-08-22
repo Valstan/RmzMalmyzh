@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import Metrika from "@/components/Metrika";
 import { SITE } from "@/lib/site";
 
 export const metadata: Metadata = {
@@ -54,6 +55,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Header />
         <main className="min-h-[60vh]">{children}</main>
         <Footer />
+        <Metrika />
       </body>
     </html>
   );

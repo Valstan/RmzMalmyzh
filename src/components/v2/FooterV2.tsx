@@ -1,4 +1,5 @@
 import Link from "next/link";
+import MetrikaInformer from "@/components/MetrikaInformer";
 import { AUTHOR, ECOSYSTEM, SITE } from "@/lib/site";
 
 export default function FooterV2() {
@@ -40,11 +41,14 @@ export default function FooterV2() {
       </div>
       <div className="border-t border-white/10 py-5 text-center text-xs text-[var(--v2-muted)]">
         <p>© {new Date().getFullYear()} {SITE.name} · Предпросмотр нового сайта</p>
-        <p className="mt-1">
-          Сделано программистом{" "}
-          <a href={AUTHOR.portfolioUrl} rel="author" className="hover:text-[var(--v2-accent)]">
-            {AUTHOR.name}
-          </a>
+        <p className="mt-1 flex items-center justify-center gap-3">
+          <MetrikaInformer className="shrink-0" />
+          <span>
+            Сделано программистом{" "}
+            <a href={AUTHOR.portfolioUrl} rel="author" className="hover:text-[var(--v2-accent)]">
+              {AUTHOR.name}
+            </a>
+          </span>
         </p>
       </div>
     </footer>
