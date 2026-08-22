@@ -60,7 +60,7 @@ export async function POST(req: Request) {
   const payload = await getPayload({ config })
   await payload.create({
     collection: 'zayavki',
-    data: { name, contact, message, subject },
+    data: { nam: name, contact, message, subject } as never,
     overrideAccess: true,
   })
 
