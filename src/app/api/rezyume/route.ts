@@ -1,6 +1,7 @@
 import config from '@payload-config'
 import { getPayload } from 'payload'
 
+import { readJsonBody } from '@/lib/requestBody'
 import { SITE } from '@/lib/site'
 
 /**
@@ -51,12 +52,11 @@ const isSingleEmail = (v: string) =>
   v.length <= 254 && /^[^\s@,;<>"]+@[^\s@,;<>".]+(\.[^\s@,;<>".]+)*\.[a-zA-Z]{2,}$/.test(v)
 
 export async function POST(req: Request) {
-  let body: Record<string, unknown>
-  try {
-    body = (await req.json()) as Record<string, unknown>
-  } catch {
-    return bad(400, 'bad_json')
-  }
+  // Потолок держится ДО разбора тела: анкета — это сотни байт, а капча
+  // проверяется позже и от заливки мегабайтов не защищает.
+  const read = await readJsonBody(req)
+  if (!read.ok) return bad(read.error === 'too_large' ? 413 : 400, read.error)
+  const body = read.body
 
   // Honeypot: у людей поле скрыто и пусто; бот его заполняет.
   if (typeof body.website === 'string' && body.website.trim() !== '') {
