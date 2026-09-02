@@ -96,9 +96,12 @@ jobs:
           echo "ok=$ok, постов на стене: $count"
           [ "$ok" = "true" ] && [ "$count" -gt 0 ] || { echo "::error::ответ шлюза без постов"; head -c 300 wall.json; exit 1; }
 
+          # Заведомо неверный ключ — в переменной: литерал в -H ловит gitleaks
+          # (curl-auth-header) и красит PR, хотя секрета тут нет.
+          WRONG_KEY=$(printf 'wrong-%s' "$RANDOM")
           bad=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
             -X POST "$GATEWAY_URL/api/gateway/call" \
-            -H "X-API-Key: not-a-real-key" -H 'Content-Type: application/json' \
+            -H "X-API-Key: $WRONG_KEY" -H 'Content-Type: application/json' \
             --data-binary @body.json)
           echo "wall.get неверным ключом: HTTP $bad"
           [ "$bad" = "401" ] || { echo "::error::неверный ключ не отвергнут ($bad) — проверка ничего не доказывает"; exit 1; }
