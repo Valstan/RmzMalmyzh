@@ -68,7 +68,7 @@ jobs:
 
       - uses: actions/checkout@v5
 
-      - name: Подготовить два варианта: репетиция и применение
+      - name: Подготовить два варианта — репетиция и применение
         run: |
           set -eo pipefail
           SRC="src/migrations/$FILE"
