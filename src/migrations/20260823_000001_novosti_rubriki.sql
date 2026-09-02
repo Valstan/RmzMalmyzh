@@ -46,10 +46,6 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
-^[[36;1mdocker exec ebe51313f0a4bfe9a44c52c96b0387419939387d2dfdc62624f160f33e208598 pg_dump -U postgres -d rmz_schema \^[[0m
-^[[36;1m  --schema-only --no-owner --no-privileges $ARGS^[[0m
-^[[36;1m^[[0m
-^[[36;1mecho^[[0m
 --
 --
 
