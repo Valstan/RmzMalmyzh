@@ -63,7 +63,10 @@ jobs:
         if: github.event_name != 'workflow_dispatch'
         run: |
           set -e
-          NEW=$(git diff --name-only --diff-filter=A HEAD~1 HEAD -- 'src/migrations/*.ts' | grep -v '/index\.ts$' || true)
+          # .sql — тоже миграция: у нас применяемый артефакт именно он (payload migrate
+          # на проде тихо выходит с кодом 0 из-за строки dev/batch=-1 от pushSchema).
+          # Ловить только .ts значило бы пропустить настоящую миграцию в авто-деплой.
+          NEW=$(git diff --name-only --diff-filter=A HEAD~1 HEAD -- 'src/migrations/*.ts' 'src/migrations/*.sql' | grep -v '/index\.ts$' || true)
           if [ -n "$NEW" ]; then
             echo "::error::Коммит вносит новые Payload-миграции. Примени их на проде вручную, затем запусти деплой через workflow_dispatch."
             echo "$NEW"

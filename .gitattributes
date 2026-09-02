@@ -1,0 +1,2 @@
+# Shell-скрипты хуков исполняются bash и на Windows: CRLF ломает их ($'\r').
+*.sh text eol=lf
