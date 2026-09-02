@@ -68,6 +68,8 @@ export interface Config {
   blocks: {};
   collections: {
     pages: Page;
+    novosti: Novosti;
+    rubriki: Rubriki;
     faq: Faq;
     media: Media;
     users: User;
@@ -80,6 +82,8 @@ export interface Config {
   collectionsJoins: {};
   collectionsSelect: {
     pages: PagesSelect<false> | PagesSelect<true>;
+    novosti: NovostiSelect<false> | NovostiSelect<true>;
+    rubriki: RubrikiSelect<false> | RubrikiSelect<true>;
     faq: FaqSelect<false> | FaqSelect<true>;
     media: MediaSelect<false> | MediaSelect<true>;
     users: UsersSelect<false> | UsersSelect<true>;
@@ -166,25 +170,85 @@ export interface Page {
   _status?: ('draft' | 'published') | null;
 }
 /**
+ * Лента заводской активности. Посты из сообщества ВКонтакте приезжают черновиками — публикует редактор.
+ *
  * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "faq".
+ * via the `definition` "novosti".
  */
-export interface Faq {
+export interface Novosti {
   id: number;
-  question: string;
-  answer: string;
-  links?:
+  /**
+   * У поста ВКонтакте заголовка нет — импортёр берёт первую строку текста. Правьте смело.
+   */
+  title: string;
+  /**
+   * Заполняется автоматически из заголовка. Можно переопределить вручную.
+   */
+  slug?: string | null;
+  /**
+   * Для постов ВКонтакте — дата публикации в сообществе, а не дата импорта.
+   */
+  publishedAt: string;
+  /**
+   * Текст карточки в ленте. Хранится готовым, а не режется из тела на каждый запрос: лента копится, и обрезка регуляркой на каждом рендере обошлась бы дорого.
+   */
+  excerpt?: string | null;
+  /**
+   * Текст поста как есть, с переносами строк. Разметка ВКонтакте вычищается импортёром.
+   */
+  body: string;
+  /**
+   * Ставится вручную. Импортёр рубрику не угадывает — см. комментарий в Rubriki.
+   */
+  rubrika?: (number | null) | Rubriki;
+  /**
+   * Картинка карточки в ленте. Импортёр берёт самое крупное фото поста.
+   */
+  cover?: (number | null) | Media;
+  images?:
     | {
-        href: string;
-        label: string;
+        image: number | Media;
         id?: string | null;
       }[]
     | null;
+  source?: ('vk' | 'ruchnaya' | 'legacy') | null;
+  /**
+   * Вид «owner_id_post_id». По нему импортёр узнаёт уже привезённый пост — без этого повторный прогон наплодил бы дубли.
+   */
+  vkPostId?: string | null;
+  vkUrl?: string | null;
+  /**
+   * Путь записи на прежнем сайте — нужен, чтобы поставить 301 и не потерять позиции в поиске.
+   */
+  legacyPath?: string | null;
+  updatedAt: string;
+  createdAt: string;
+  _status?: ('draft' | 'published') | null;
+}
+/**
+ * Тематики, по которым делится лента новостей. Рубрику у новости ставит редактор.
+ *
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "rubriki".
+ */
+export interface Rubriki {
+  id: number;
+  name: string;
+  /**
+   * Заполняется автоматически из заголовка. Можно переопределить вручную.
+   */
+  slug?: string | null;
+  /**
+   * Показывается на странице рубрики под заголовком. Необязательно.
+   */
+  description?: string | null;
   order?: number | null;
   updatedAt: string;
   createdAt: string;
 }
 /**
+ * Картинки сайта. Файлы с именем «wp-ГОД-МЕСЯЦ-…» — из старого сайта rmz43.ru; чтобы заменить такую картинку на страницах, откройте её здесь и загрузите новый файл: ссылки в контенте ведут на номер записи, а не на имя файла, и переживают замену.
+ *
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "media".
  */
@@ -228,6 +292,25 @@ export interface Media {
       filename?: string | null;
     };
   };
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "faq".
+ */
+export interface Faq {
+  id: number;
+  question: string;
+  answer: string;
+  links?:
+    | {
+        href: string;
+        label: string;
+        id?: string | null;
+      }[]
+    | null;
+  order?: number | null;
+  updatedAt: string;
+  createdAt: string;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
@@ -299,6 +382,14 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'pages';
         value: number | Page;
+      } | null)
+    | ({
+        relationTo: 'novosti';
+        value: number | Novosti;
+      } | null)
+    | ({
+        relationTo: 'rubriki';
+        value: number | Rubriki;
       } | null)
     | ({
         relationTo: 'faq';
@@ -375,6 +466,44 @@ export interface PagesSelect<T extends boolean = true> {
   updatedAt?: T;
   createdAt?: T;
   _status?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "novosti_select".
+ */
+export interface NovostiSelect<T extends boolean = true> {
+  title?: T;
+  slug?: T;
+  publishedAt?: T;
+  excerpt?: T;
+  body?: T;
+  rubrika?: T;
+  cover?: T;
+  images?:
+    | T
+    | {
+        image?: T;
+        id?: T;
+      };
+  source?: T;
+  vkPostId?: T;
+  vkUrl?: T;
+  legacyPath?: T;
+  updatedAt?: T;
+  createdAt?: T;
+  _status?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "rubriki_select".
+ */
+export interface RubrikiSelect<T extends boolean = true> {
+  name?: T;
+  slug?: T;
+  description?: T;
+  order?: T;
+  updatedAt?: T;
+  createdAt?: T;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema

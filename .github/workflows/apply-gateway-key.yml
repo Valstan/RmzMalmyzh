@@ -1,0 +1,167 @@
+# Забрать ключ шлюза SARAFAN из vault-комнаты `rmz` и положить в прод-env.
+# Мандат brain 2026-08-25 (gateway-key-issued-pull-it): GATEWAY_KEY_RMZ выпущен
+# Сеткой, лежит в комнате `setka`, grant setka → rmz выдан владельцем 25.08 —
+# наш обычный токен комнаты читает его по имени (karman/docs/secrets-client-guide.md,
+# «Ключ, общий с другим проектом»). Значение в чат, лог и репо не попадает:
+# маскируется add-mask, идёт по scp и дописывается в /etc/rmz/rmz.env под root.
+#
+# Имена в env — по разведению из реестра brain (access/INDEX.md §5, «одно имя —
+# два противоположных ключа»): SARAFAN_GATEWAY_KEY = наш ключ ПОТРЕБИТЕЛЯ у Сетки.
+# Если позже появится приёмник (Сарафан шлёт нам), его ключ будет GATEWAY_KEY_RMZ
+# входящим — не путать.
+#
+# Режимы: check (по умолчанию) — только прочитать из vault и проверить на шлюзе,
+# на бокс ничего не писать; apply — то же плюс запись в env.
+#
+# Проверка настоящая, «проба, которая краснеет»: свой ключ обязан прочитать стену
+# -195583920 (ok:true, count>0), а заведомо неверный — получить 401. Если 401
+# не приходит, шлюз не проверяет ключи и «зелёный» ничего бы не доказывал (#104).
+#
+# Сервис НЕ перезапускается: код на проде эти переменные пока не читает; их
+# подхватит первый деплой импортёра (деплой рестартует юнит сам).
+#
+# Адреса КАРМАНа и Сетки — публичные хосты, они уже лежат в публичных воркфлоу
+# соседних репо; секрет здесь только сам ключ.
+name: Apply gateway key (prod)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'check — прочитать и проверить на шлюзе; apply — плюс записать в /etc/rmz/rmz.env'
+        type: choice
+        options: [check, apply]
+        default: check
+
+concurrency:
+  group: rmz-prod-ssh
+  cancel-in-progress: false
+
+env:
+  VAULT_URL: https://831d0ce99bdf.vps.myjino.ru
+  GATEWAY_URL: https://3931b3fe50ab.vps.myjino.ru
+  VK_OWNER_ID: '-195583920'
+
+jobs:
+  key:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MODE: ${{ inputs.mode }}
+    steps:
+      - name: Прочитать ключ из vault по grant
+        env:
+          SECRETS_TOKEN: ${{ secrets.SECRETS_TOKEN }}
+        run: |
+          set -eo pipefail
+          [ -n "$SECRETS_TOKEN" ] || { echo "::error::secrets.SECRETS_TOKEN пуст — токен комнаты rmz положен 2026-07-18"; exit 1; }
+          umask 077
+          code=$(curl -s -o resp.json -w '%{http_code}' --max-time 20 \
+            -H "Authorization: Bearer $SECRETS_TOKEN" \
+            "$VAULT_URL/api/secrets?key=GATEWAY_KEY_RMZ")
+          echo "vault GATEWAY_KEY_RMZ: HTTP $code"
+          case "$code" in
+            200) ;;
+            404) echo "::error::404 — grant setka→rmz на GATEWAY_KEY_RMZ не виден комнате (или ключ ещё не заведён у источника)"; exit 1 ;;
+            401) echo "::error::401 — токен комнаты отозван/битый"; exit 1 ;;
+            *)   echo "::error::неожиданный ответ vault"; exit 1 ;;
+          esac
+          KEY=$(jq -r '.secrets.GATEWAY_KEY_RMZ // empty' resp.json)
+          rm -f resp.json
+          [ -n "$KEY" ] || { echo "::error::200, но значение пустое"; exit 1; }
+          echo "::add-mask::$KEY"
+          printf '%s' "$KEY" > key.txt
+          echo "длина ключа: ${#KEY}, sha256: $(printf '%s' "$KEY" | sha256sum | cut -c1-12)…"
+
+          # ECOSYSTEM_KEY по тому же grant — только факт наличия, значение не нужно.
+          eco=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+            -H "Authorization: Bearer $SECRETS_TOKEN" \
+            "$VAULT_URL/api/secrets?key=ECOSYSTEM_KEY")
+          echo "vault ECOSYSTEM_KEY: HTTP $eco (200 — self-serve Сетки доступен без писем)"
+
+      - name: Проверить ключ на шлюзе (проба, которая краснеет)
+        run: |
+          set -eo pipefail
+          KEY=$(cat key.txt)
+          echo '{"method":"wall.get","params":{"owner_id":'"$VK_OWNER_ID"',"count":1}}' > body.json
+
+          code=$(curl -s -o wall.json -w '%{http_code}' --max-time 30 \
+            -X POST "$GATEWAY_URL/api/gateway/call" \
+            -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+            --data-binary @body.json)
+          echo "wall.get своим ключом: HTTP $code"
+          [ "$code" = "200" ] || { echo "::error::шлюз не принял ключ"; head -c 300 wall.json; exit 1; }
+          ok=$(jq -r '.ok' wall.json)
+          count=$(jq -r '.response.count // 0' wall.json)
+          echo "ok=$ok, постов на стене: $count"
+          [ "$ok" = "true" ] && [ "$count" -gt 0 ] || { echo "::error::ответ шлюза без постов"; head -c 300 wall.json; exit 1; }
+
+          # Заведомо неверный ключ — в переменной: литерал в -H ловит gitleaks
+          # (curl-auth-header) и красит PR, хотя секрета тут нет.
+          WRONG_KEY=$(printf 'wrong-%s' "$RANDOM")
+          bad=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+            -X POST "$GATEWAY_URL/api/gateway/call" \
+            -H "X-API-Key: $WRONG_KEY" -H 'Content-Type: application/json' \
+            --data-binary @body.json)
+          echo "wall.get неверным ключом: HTTP $bad"
+          [ "$bad" = "401" ] || { echo "::error::неверный ключ не отвергнут ($bad) — проверка ничего не доказывает"; exit 1; }
+          rm -f wall.json body.json
+          echo "✅ ключ читает стену $VK_OWNER_ID, чужой ключ получает 401"
+
+      - name: Setup SSH
+        if: inputs.mode == 'apply'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+        run: |
+          set -e
+          if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$DEPLOY_SSH_HOST" ] || [ -z "$DEPLOY_SSH_PORT" ]; then
+            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / vars.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519_rmz
+          chmod 600 ~/.ssh/id_ed25519_rmz
+          ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat > ~/.ssh/config <<CFG
+          Host rmz
+            HostName $DEPLOY_SSH_HOST
+            Port $DEPLOY_SSH_PORT
+            User valstan
+            IdentityFile ~/.ssh/id_ed25519_rmz
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+          CFG
+          chmod 600 ~/.ssh/config
+
+      - name: Записать в прод-env (идемпотентно, без рестарта)
+        if: inputs.mode == 'apply'
+        run: |
+          set -eo pipefail
+          umask 077
+          {
+            echo "SARAFAN_GATEWAY_URL=$GATEWAY_URL"
+            echo "SARAFAN_GATEWAY_KEY=$(cat key.txt)"
+            echo "VK_RMZ_OWNER_ID=$VK_OWNER_ID"
+          } > gw.env
+          scp -q gw.env rmz:/tmp/gw.env
+          rm -f gw.env key.txt
+          ssh rmz 'sudo bash -s' <<'REMOTE'
+          set -e
+          ENV=/etc/rmz/rmz.env
+          test -f "$ENV" || { echo "::error::$ENV нет — сначала setup-prod-stage2.yml"; exit 1; }
+          sed -i '/^SARAFAN_GATEWAY_/d; /^VK_RMZ_OWNER_ID=/d' "$ENV"
+          cat /tmp/gw.env >> "$ENV"
+          rm -f /tmp/gw.env
+          chown root:valstan "$ENV"
+          chmod 640 "$ENV"
+          echo "gateway lines in env now: $(grep -cE '^(SARAFAN_GATEWAY_|VK_RMZ_OWNER_ID=)' "$ENV")"
+          grep -q '^SARAFAN_GATEWAY_KEY=.\{8,\}' "$ENV" || { echo "::error::ключ не записан"; exit 1; }
+          REMOTE
+          echo "✅ SARAFAN_GATEWAY_URL / SARAFAN_GATEWAY_KEY / VK_RMZ_OWNER_ID записаны; юнит не перезапускался"
+
+      - name: Убрать ключ с раннера
+        if: always()
+        run: rm -f key.txt gw.env resp.json wall.json body.json
