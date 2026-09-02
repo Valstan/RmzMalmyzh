@@ -9,6 +9,8 @@ import { fileURLToPath } from 'url'
 import { Pages } from './collections/Pages'
 import { Faq } from './collections/Faq'
 import { Media } from './collections/Media'
+import { Novosti } from './collections/Novosti'
+import { Rubriki } from './collections/Rubriki'
 import { Users } from './collections/Users'
 import { Zayavki } from './collections/Zayavki'
 
@@ -34,7 +36,7 @@ export default buildConfig({
     // вручную на этапе деплоя (паттерн Sabantuy/Kazanskaya, #017).
     push: true,
   }),
-  collections: [Pages, Faq, Media, Users, Zayavki],
+  collections: [Pages, Novosti, Rubriki, Faq, Media, Users, Zayavki],
   // Email-дубль заявок (роут /api/zayavka → payload.sendEmail). Провайдеро-независимо:
   // любой SMTP-relay через env. Без SMTP_HOST адаптер не подключаем → письма в консоль
   // (dev/CI), сборка зелёная без секретов. Реальные SMTP-доступы — только в
