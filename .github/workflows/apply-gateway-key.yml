@@ -10,12 +10,17 @@
 # Если позже появится приёмник (Сарафан шлёт нам), его ключ будет GATEWAY_KEY_RMZ
 # входящим — не путать.
 #
-# Режимы: check (по умолчанию) — только прочитать из vault и проверить на шлюзе,
-# на бокс ничего не писать; apply — то же плюс запись в env.
+# Режимы: check (по умолчанию) — прочитать из vault и проверить на шлюзе, env не
+# трогать; apply — то же плюс запись в env.
 #
 # Проверка настоящая, «проба, которая краснеет»: свой ключ обязан прочитать стену
 # -195583920 (ok:true, count>0), а заведомо неверный — получить 401. Если 401
 # не приходит, шлюз не проверяет ключи и «зелёный» ничего бы не доказывал (#104).
+#
+# ⚠️ Проба выполняется С БОКСА, не с раннера: curl с раннера GitHub до myjino-хоста
+# Сетки ушёл в таймаут (run 33680848596, exit 28) — та же грабля, что у смоука в
+# apply-form-secrets.yml. Vault с раннера отвечает, шлюз — нет; бокс и Сетка на
+# одном хостере.
 #
 # Сервис НЕ перезапускается: код на проде эти переменные пока не читает; их
 # подхватит первый деплой импортёра (деплой рестартует юнит сам).
@@ -58,7 +63,7 @@ jobs:
           umask 077
           code=$(curl -s -o resp.json -w '%{http_code}' --max-time 20 \
             -H "Authorization: Bearer $SECRETS_TOKEN" \
-            "$VAULT_URL/api/secrets?key=GATEWAY_KEY_RMZ")
+            "$VAULT_URL/api/secrets?key=GATEWAY_KEY_RMZ") || true
           echo "vault GATEWAY_KEY_RMZ: HTTP $code"
           case "$code" in
             200) ;;
@@ -76,40 +81,10 @@ jobs:
           # ECOSYSTEM_KEY по тому же grant — только факт наличия, значение не нужно.
           eco=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
             -H "Authorization: Bearer $SECRETS_TOKEN" \
-            "$VAULT_URL/api/secrets?key=ECOSYSTEM_KEY")
+            "$VAULT_URL/api/secrets?key=ECOSYSTEM_KEY") || true
           echo "vault ECOSYSTEM_KEY: HTTP $eco (200 — self-serve Сетки доступен без писем)"
 
-      - name: Проверить ключ на шлюзе (проба, которая краснеет)
-        run: |
-          set -eo pipefail
-          KEY=$(cat key.txt)
-          echo '{"method":"wall.get","params":{"owner_id":'"$VK_OWNER_ID"',"count":1}}' > body.json
-
-          code=$(curl -s -o wall.json -w '%{http_code}' --max-time 30 \
-            -X POST "$GATEWAY_URL/api/gateway/call" \
-            -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
-            --data-binary @body.json)
-          echo "wall.get своим ключом: HTTP $code"
-          [ "$code" = "200" ] || { echo "::error::шлюз не принял ключ"; head -c 300 wall.json; exit 1; }
-          ok=$(jq -r '.ok' wall.json)
-          count=$(jq -r '.response.count // 0' wall.json)
-          echo "ok=$ok, постов на стене: $count"
-          [ "$ok" = "true" ] && [ "$count" -gt 0 ] || { echo "::error::ответ шлюза без постов"; head -c 300 wall.json; exit 1; }
-
-          # Заведомо неверный ключ — в переменной: литерал в -H ловит gitleaks
-          # (curl-auth-header) и красит PR, хотя секрета тут нет.
-          WRONG_KEY=$(printf 'wrong-%s' "$RANDOM")
-          bad=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
-            -X POST "$GATEWAY_URL/api/gateway/call" \
-            -H "X-API-Key: $WRONG_KEY" -H 'Content-Type: application/json' \
-            --data-binary @body.json)
-          echo "wall.get неверным ключом: HTTP $bad"
-          [ "$bad" = "401" ] || { echo "::error::неверный ключ не отвергнут ($bad) — проверка ничего не доказывает"; exit 1; }
-          rm -f wall.json body.json
-          echo "✅ ключ читает стену $VK_OWNER_ID, чужой ключ получает 401"
-
       - name: Setup SSH
-        if: inputs.mode == 'apply'
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           DEPLOY_SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
@@ -135,6 +110,41 @@ jobs:
             ServerAliveInterval 30
           CFG
           chmod 600 ~/.ssh/config
+
+      - name: Проверить ключ на шлюзе с бокса (проба, которая краснеет)
+        run: |
+          set -eo pipefail
+          umask 077
+          echo '{"method":"wall.get","params":{"owner_id":'"$VK_OWNER_ID"',"count":1}}' > body.json
+          scp -q key.txt rmz:/tmp/gw-key.txt
+          scp -q body.json rmz:/tmp/gw-body.json
+          rm -f body.json
+          ssh rmz 'bash -s' "$GATEWAY_URL" <<'REMOTE'
+          set -eo pipefail
+          GW="$1"
+          KEY=$(cat /tmp/gw-key.txt)
+          code=$(curl -s -o /tmp/gw-wall.json -w '%{http_code}' --max-time 60 \
+            -X POST "$GW/api/gateway/call" \
+            -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+            --data-binary @/tmp/gw-body.json) || code="curl-exit-$?"
+          echo "wall.get своим ключом: HTTP $code"
+          [ "$code" = "200" ] || { echo "::error::шлюз не принял ключ"; head -c 300 /tmp/gw-wall.json 2>/dev/null; rm -f /tmp/gw-key.txt /tmp/gw-body.json /tmp/gw-wall.json; exit 1; }
+          ok=$(grep -o '"ok": *true' /tmp/gw-wall.json | head -1)
+          count=$(grep -o '"count": *[0-9]*' /tmp/gw-wall.json | head -1 | grep -o '[0-9]*$')
+          echo "ok=${ok:-false}, постов на стене: ${count:-0}"
+          [ -n "$ok" ] && [ "${count:-0}" -gt 0 ] || { echo "::error::ответ шлюза без постов"; head -c 300 /tmp/gw-wall.json; rm -f /tmp/gw-key.txt /tmp/gw-body.json /tmp/gw-wall.json; exit 1; }
+
+          # Заведомо неверный ключ — в переменной: литерал в -H ловит gitleaks.
+          WRONG_KEY=$(printf 'wrong-%s' "$RANDOM")
+          bad=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 \
+            -X POST "$GW/api/gateway/call" \
+            -H "X-API-Key: $WRONG_KEY" -H 'Content-Type: application/json' \
+            --data-binary @/tmp/gw-body.json) || bad="curl-exit-$?"
+          echo "wall.get неверным ключом: HTTP $bad"
+          rm -f /tmp/gw-key.txt /tmp/gw-body.json /tmp/gw-wall.json
+          [ "$bad" = "401" ] || { echo "::error::неверный ключ не отвергнут ($bad) — проверка ничего не доказывает"; exit 1; }
+          echo "✅ ключ читает стену, чужой ключ получает 401"
+          REMOTE
 
       - name: Записать в прод-env (идемпотентно, без рестарта)
         if: inputs.mode == 'apply'
@@ -164,4 +174,4 @@ jobs:
 
       - name: Убрать ключ с раннера
         if: always()
-        run: rm -f key.txt gw.env resp.json wall.json body.json
+        run: rm -f key.txt gw.env resp.json body.json
