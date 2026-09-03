@@ -61,7 +61,7 @@ export const getPosts = cache(async (): Promise<Page[]> => {
  */
 export const getStati = cache(async (): Promise<Page[]> => {
   const posts = await getPosts()
-  return posts.filter((p) => legacyGenre(p.path) === 'statya')
+  return posts
 })
 
 /**
@@ -79,6 +79,7 @@ export const getNovosti = cache(async (): Promise<Novosti[]> => {
   const payload = await db()
   const res = await payload.find({
     collection: 'novosti',
+    where: { _status: { equals: 'published' } },
     pagination: false,
     limit: 1000,
     sort: '-publishedAt',
