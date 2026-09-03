@@ -14,7 +14,8 @@
     "generate:importmap": "cross-env NODE_OPTIONS=--no-deprecation payload generate:importmap",
     "lint": "eslint src scripts",
     "parse-mirror": "node scripts/parse-mirror.mjs",
-    "fetch-images": "node scripts/fetch-images.mjs"
+    "fetch-images": "node scripts/fetch-images.mjs",
+    "make-icon": "node scripts/make-icon.mjs"
   },
   "dependencies": {
     "@payloadcms/db-postgres": "3.75.0",
