@@ -21,12 +21,12 @@ jobs:
       - name: Append pubkey to authorized_keys (idempotent)
         env:
           SSH_BOOTSTRAP_KEY: ${{ secrets.SSH_BOOTSTRAP_KEY }}
-          HOST: ${{ vars.DEPLOY_SSH_HOST }}
+          HOST: ${{ secrets.DEPLOY_SSH_HOST }}
           PORT: ${{ vars.DEPLOY_SSH_PORT }}
         run: |
           set -e
           if [ -z "$SSH_BOOTSTRAP_KEY" ] || [ -z "$HOST" ] || [ -z "$PORT" ]; then
-            echo "::error::Нужны secrets.SSH_BOOTSTRAP_KEY + vars.DEPLOY_SSH_HOST/PORT"
+            echo "::error::Нужны secrets.SSH_BOOTSTRAP_KEY + secrets.DEPLOY_SSH_HOST/PORT"
             exit 1
           fi
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
