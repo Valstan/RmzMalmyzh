@@ -17,16 +17,16 @@
 # -195583920 (ok:true, count>0), а заведомо неверный — получить 401. Если 401
 # не приходит, шлюз не проверяет ключи и «зелёный» ничего бы не доказывал (#104).
 #
-# ⚠️ Проба выполняется С БОКСА, не с раннера: curl с раннера GitHub до myjino-хоста
+# ⚠️ Проба выполняется С БОКСА, не с раннера: curl с раннера GitHub до хоста
 # Сетки ушёл в таймаут (run 33680848596, exit 28) — та же грабля, что у смоука в
-# apply-form-secrets.yml. Vault с раннера отвечает, шлюз — нет; бокс и Сетка на
-# одном хостере.
+# apply-form-secrets.yml. Vault с раннера отвечает, шлюз — нет; бокс и Сетка у
+# одного хостера.
 #
 # Сервис НЕ перезапускается: код на проде эти переменные пока не читает; их
 # подхватит первый деплой импортёра (деплой рестартует юнит сам).
 #
-# Адреса КАРМАНа и Сетки — публичные хосты, они уже лежат в публичных воркфлоу
-# соседних репо; секрет здесь только сам ключ.
+# Адреса КАРМАНа и Сетки — в secrets, не в файле: публичный репозиторий — recon-
+# поверхность (D-038), а vars печатаются в лог (pool #223).
 name: Apply gateway key (prod)
 
 on:
@@ -43,8 +43,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  VAULT_URL: https://831d0ce99bdf.vps.myjino.ru
-  GATEWAY_URL: https://3931b3fe50ab.vps.myjino.ru
+  VAULT_URL: ${{ secrets.VAULT_URL }}
+  GATEWAY_URL: ${{ secrets.GATEWAY_URL }}
   VK_OWNER_ID: '-195583920'
 
 jobs:
@@ -60,6 +60,8 @@ jobs:
         run: |
           set -eo pipefail
           [ -n "$SECRETS_TOKEN" ] || { echo "::error::secrets.SECRETS_TOKEN пуст — токен комнаты rmz положен 2026-07-18"; exit 1; }
+          [ -n "$VAULT_URL" ] && [ -n "$GATEWAY_URL" ] || { echo "::error::secrets.VAULT_URL / secrets.GATEWAY_URL не заданы"; exit 1; }
+          [ -n "$VAULT_URL" ] && [ -n "$GATEWAY_URL" ] || { echo "::error::secrets.VAULT_URL / secrets.GATEWAY_URL не заданы"; exit 1; }
           umask 077
           code=$(curl -s -o resp.json -w '%{http_code}' --max-time 20 \
             -H "Authorization: Bearer $SECRETS_TOKEN" \

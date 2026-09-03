@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 import { withPayload } from "@payloadcms/next/withPayload";
 
-// Стадия 2: Payload CMS + SSR/ISR, третий Node-жилец Бокса Сабантуя (:3002).
+// Стадия 2: Payload CMS + SSR/ISR, Node-сервис на общем боксе экосистемы.
 // Прод-VPS (1.5 GiB RAM без swap) не тянет `next build` (OOM, G20) — сборка едет
 // в CI, на сервер кладём standalone-артефакт.
 //
