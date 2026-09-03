@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v5
+
       - name: Setup SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -85,6 +87,36 @@ jobs:
             | tail -60 || echo "ошибок нет"
           echo "== сколько раз встретился шум server-action (для контекста) =="
           journalctl -u rmz -n 400 --no-pager -o cat | grep -ciE 'failed to find server action' || true
+          REMOTE
+
+      # Дрейф схемы прода от конфига (класс G231). Payload держит в
+      # `payload_locked_documents_rels` по колонке `<коллекция>_id` на КАЖДУЮ коллекцию,
+      # и блокировку берёт при открытии любого документа. Пропущенная колонка кладёт
+      # редактирование целиком, а миграция при этом применяется чисто — так и вышло
+      # 02.09, обнаружилось только 04.09 глазами владельца. Проверка read-only.
+      - name: Дрейф схемы — колонки блокировок под каждую коллекцию
+        run: |
+          set -eo pipefail
+          SLUGS=$(grep -hoE "^  slug: '[a-z0-9_-]+'," src/collections/*.ts | grep -oE "'[a-z0-9_-]+'" | tr -d "'" | sort -u)
+          echo "коллекции в конфиге: $(echo $SLUGS | tr '\n' ' ')"
+          [ -n "$SLUGS" ] || { echo "::error::не удалось прочитать список коллекций из src/collections"; exit 1; }
+          echo "$SLUGS" > slugs.txt
+          scp -q slugs.txt rmz:/tmp/rmz-slugs.txt
+          ssh rmz 'sudo bash -s' <<'REMOTE'
+          set -eo pipefail
+          DB=$(grep '^DATABASE_URL=' /etc/rmz/rmz.env | sed 's/^DATABASE_URL=//')
+          COLS=$(psql "$DB" -tAc "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='payload_locked_documents_rels'")
+          MISS=""
+          while read -r s; do
+            [ -n "$s" ] || continue
+            echo "$COLS" | grep -qx "${s}_id" || MISS="$MISS ${s}_id"
+          done < /tmp/rmz-slugs.txt
+          rm -f /tmp/rmz-slugs.txt
+          if [ -n "$MISS" ]; then
+            echo "::error::в payload_locked_documents_rels нет колонок:$MISS — админка не сможет открыть ни один документ"
+            exit 1
+          fi
+          echo "✅ колонки блокировок на месте для всех коллекций"
           REMOTE
 
       # Профилактика G234 (письмо brain 2026-08-08): гонка keep-alive между

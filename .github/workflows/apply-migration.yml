@@ -118,10 +118,14 @@ jobs:
           ssh rmz 'sudo bash -s' <<'REMOTE' > before.txt
           set -e
           DB=$(grep '^DATABASE_URL=' /etc/rmz/rmz.env | sed 's/^DATABASE_URL=//')
-          psql "$DB" -tAc "SELECT tablename || ' [' || tableowner || ']' FROM pg_tables WHERE schemaname='public' ORDER BY 1"
+          psql "$DB" -tAc "
+            SELECT tablename || ' [' || tableowner || ']' FROM pg_tables WHERE schemaname='public'
+            UNION ALL
+            SELECT table_name || '.' || column_name FROM information_schema.columns WHERE table_schema='public'
+            ORDER BY 1"
           REMOTE
-          echo "таблиц до: $(wc -l < before.txt)"
-          cat before.txt
+          echo "строк снимка до: $(wc -l < before.txt)"
+          grep -F ' [' before.txt
 
       - name: Бэкап прод-БД (pg_dump на боксе)
         if: inputs.mode == 'apply'
@@ -163,26 +167,37 @@ jobs:
           ssh rmz 'sudo bash -s' <<'REMOTE' > after.txt
           set -e
           DB=$(grep '^DATABASE_URL=' /etc/rmz/rmz.env | sed 's/^DATABASE_URL=//')
-          psql "$DB" -tAc "SELECT tablename || ' [' || tableowner || ']' FROM pg_tables WHERE schemaname='public' ORDER BY 1"
+          psql "$DB" -tAc "
+            SELECT tablename || ' [' || tableowner || ']' FROM pg_tables WHERE schemaname='public'
+            UNION ALL
+            SELECT table_name || '.' || column_name FROM information_schema.columns WHERE table_schema='public'
+            ORDER BY 1"
           REMOTE
-          echo "== дельта таблиц =="
+          echo "== дельта схемы =="
           diff before.txt after.txt || true
 
+          # ⚠️ Снимок берётся по паре «таблица.колонка», а не по одному списку таблиц.
+          # Причина — разбор 04.09: миграция 20260823_000001 не добавила две колонки в
+          # СУЩЕСТВУЮЩУЮ payload_locked_documents_rels, список таблиц при этом не
+          # изменился, приёмка позеленела, а админка потеряла редактирование целиком.
+          # Класс G231: правка существующей таблицы невидима для проверки по таблицам.
           NEW=$(comm -13 <(sort before.txt) <(sort after.txt) || true)
+          GONE=$(comm -23 <(sort before.txt) <(sort after.txt) || true)
           if [ "$MODE" = "dry-run" ]; then
-            if [ -n "$NEW" ]; then
+            if [ -n "$NEW$GONE" ]; then
               echo "::error::репетиция оставила следы в схеме — ROLLBACK не сработал:"
-              echo "$NEW"; exit 1
+              echo "$NEW$GONE"; exit 1
             fi
             echo "✅ репетиция прошла и не оставила следа: миграция выполнима на проде"
           else
-            [ -n "$NEW" ] || { echo "::error::после apply новых таблиц не появилось"; exit 1; }
-            echo "новые таблицы:"; echo "$NEW"
+            [ -n "$NEW" ] || { echo "::error::после apply схема не изменилась — миграция ничего не сделала"; exit 1; }
+            echo "появилось в схеме:"; echo "$NEW"
+            [ -z "$GONE" ] || { echo "::error::миграция УДАЛИЛА из схемы:"; echo "$GONE"; exit 1; }
             # Владелец обязан совпасть с ролью приложения, иначе рантайм получит
-            # permission denied уже на живом сайте.
-            BAD=$(echo "$NEW" | grep -v '\[rmz_app\]' || true)
+            # permission denied уже на живом сайте. Проверяем только строки таблиц.
+            BAD=$(echo "$NEW" | grep -F ' [' | grep -v '\[rmz_app\]' || true)
             [ -z "$BAD" ] || { echo "::error::таблицы созданы не под ролью приложения:"; echo "$BAD"; exit 1; }
-            echo "✅ все новые таблицы принадлежат rmz_app"
+            echo "✅ ничего не потеряно, новые таблицы принадлежат rmz_app"
           fi
 
       - name: Отметить миграцию в реестре Payload
