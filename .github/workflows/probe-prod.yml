@@ -70,6 +70,23 @@ jobs:
           journalctl -u rmz -n 30 --no-pager -o cat
           REMOTE
 
+      # Падение рендера на проде видно посетителю только как «Application error»
+      # с digest'ом: сам текст ошибки Next в продакшене не показывает намеренно.
+      # Стек лежит в журнале сервиса — вытаскиваем его отдельно, отфильтровав
+      # шум «Failed to find Server Action» (это не поломка, а вкладка, открытая
+      # до деплоя: клиент зовёт экшен предыдущей сборки).
+      - name: Журнал — свежие ошибки рендера
+        run: |
+          ssh rmz 'sudo bash -s' <<'REMOTE'
+          echo "== ошибки в журнале (последние 400 строк, без шума server-action) =="
+          journalctl -u rmz -n 400 --no-pager -o cat \
+            | grep -viE 'failed to find server action|nextjs\.org/docs/messages/failed-to-find' \
+            | grep -iE 'error|exception|digest|unhandled|ECONNREFUSED|permission denied|at [A-Za-z_$][A-Za-z0-9_$.]* \(' \
+            | tail -60 || echo "ошибок нет"
+          echo "== сколько раз встретился шум server-action (для контекста) =="
+          journalctl -u rmz -n 400 --no-pager -o cat | grep -ciE 'failed to find server action' || true
+          REMOTE
+
       # Профилактика G234 (письмо brain 2026-08-08): гонка keep-alive между
       # idle-таймаутом пула nginx и `server.keepAliveTimeout` Node даёт 502 на
       # случайной позиции серии POST при пустых логах приложения. Таймаут задаётся
