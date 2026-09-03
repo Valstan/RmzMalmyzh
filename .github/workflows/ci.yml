@@ -32,6 +32,37 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      # Битый YAML воркфлоу GitHub не краснит: файл просто показывается по пути
+      # вместо имени, а `gh workflow run` отвечает 422 «нет триггера
+      # workflow_dispatch». Так 02.09 два PR прошли зелёными с невалидным
+      # apply-migration.yml (второе двоеточие в `name:` шага), и поломка нашлась
+      # только при попытке запустить миграцию.
+      # Контроль на непустоту (проверка обязана краснеть, а не молчать):
+      #   git show 94c9ed2:.github/workflows/apply-migration.yml
+      # этим шагом отвергается — «mapping values are not allowed here».
+      - name: Воркфлоу — валидный YAML
+        run: |
+          set -eo pipefail
+          python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
+          python3 - <<'PY'
+          import glob, sys, yaml
+          files = sorted(glob.glob('.github/workflows/*.yml'))
+          if not files:
+              print('::error::воркфлоу не найдены — проверка бессмысленна')
+              sys.exit(1)
+          bad = []
+          for f in files:
+              try:
+                  yaml.safe_load(open(f, encoding='utf-8'))
+              except Exception as e:
+                  bad.append(f"{f}: {str(e).splitlines()[0]}")
+          print(f"проверено воркфлоу: {len(files)}")
+          for b in bad:
+              print(f"::error::невалидный YAML — {b}")
+          sys.exit(1 if bad else 0)
+          PY
+
       - run: pnpm lint
       - run: pnpm typecheck
       # Чистая логика (разбор стены VK) — числами на фикстуре, без БД (#098).
