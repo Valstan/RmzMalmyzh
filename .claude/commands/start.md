@@ -5,8 +5,8 @@ description: Старт сессии — синхра репо (#032) + mailbox-
 Выполни старт сессии «RmzMalmyzh» строго по шагам (детали — в `AGENTS.md` §📬 Mailbox check). Порядок жёсткий: **сначала синхронизация (шаги 1–2), потом чтение session-памяти (шаги 5–6)** — pool #032.
 
 1. **Sync свой репо — ПЕРВЫМ:** `git fetch`; если working tree чист и есть отставание — `git checkout main && git pull --ff-only`. Незакоммиченное / не-ff — сообщи и не форсируй. Только после этого можно доверять `SESSION_HANDOFF`/`PENDING`.
-2. **Sync brain (read-only):** `cd ../brain_matrica && git pull --ff-only && cd -`. Если не ff — сообщи и не форсируй.
-3. **Скан входящих:** прочитай файлы в корне `../brain_matrica/mailboxes/RmzMalmyzh/from-brain/*.md` (НЕ `DRAFTS/`, НЕ `ARCHIVE/`).
+2. **Brain и соседние репо не синхронизировать:** никаких `fetch`/`pull`/`checkout` в `../brain_matrica/` — там может идти чужая работа с незапушенной почтой (`AGENTS.md` §🚫).
+3. **Скан входящих — два канала:** локально корень `../brain_matrica/mailboxes/RmzMalmyzh/from-brain/*.md` (НЕ `DRAFTS/`, НЕ `ARCHIVE/`) **плюс** GitHub: `gh api "repos/Valstan/brain_matrica/contents/mailboxes/RmzMalmyzh/from-brain?ref=main" --jq '.[] | select(.type=="file") | .name'`. Набор писем = объединение; письмо, которого нет локально, читать через `gh api … --jq .content | base64 -d`; одноимённое письмо с разным содержимым → прочитать обе версии, доложить конфликт, ничего не перезаписывать.
 4. **Доложи** пользователю сводку писем ДО чтения handoff, в формате:
    ```
    📬 N писем от brain_matrica:
