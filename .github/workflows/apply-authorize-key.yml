@@ -1,7 +1,7 @@
 name: Authorize deploy key (bootstrap, manual)
 
 # Одноразовый bootstrap (#001): добавляет публичную часть изолированного ключа
-# RmzMalmyzh в authorized_keys Бокса Сабантуя, заходя временным
+# RmzMalmyzh в authorized_keys бокса, заходя временным
 # secrets.SSH_BOOTSTRAP_KEY (сабантуевский деплой-ключ).
 # После успешного прогона секрет SSH_BOOTSTRAP_KEY удаляется — дальше все
 # воркфлоу ходят только своим ключом (secrets.SSH_PRIVATE_KEY).

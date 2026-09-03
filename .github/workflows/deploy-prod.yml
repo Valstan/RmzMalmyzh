@@ -1,6 +1,6 @@
 name: Deploy to production
 
-# Стадия 2: standalone-артефакт Next+Payload на Бокс Сабантуя (третий жилец, :3002).
+# Стадия 2: standalone-артефакт Next+Payload на общий бокс экосистемы.
 # Сборка строго в CI (G20: бокс 1.5 GiB swapless не тянет next build), на сервер
 # едет tar → releases/<sha> → symlink current → systemctl restart rmz.
 # Харвест deploy-prod.yml KazanskayaMalmyzh (ADR-0007).
@@ -8,7 +8,8 @@ name: Deploy to production
 #
 # Требуется:
 #   secrets.SSH_PRIVATE_KEY   — изолированный ключ id_ed25519_rmz_deploy (#001)
-#   vars.DEPLOY_SSH_HOST/PORT — Бокс Сабантуя (myjino ротирует hex-хост — потому в vars)
+#   secrets.DEPLOY_SSH_HOST + vars.DEPLOY_SSH_PORT — бокс. Хост в secrets: vars
+#                               печатаются в публичный лог как есть (D-038, pool #223)
 #   vars.NEXT_PUBLIC_SITE_URL — боевой домен, строго punycode (G133/G134):
 #                               https://xn--g1ajl.xn--80adkdyec4j.xn--p1ai
 
@@ -190,7 +191,7 @@ jobs:
           sleep 6
           code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 http://127.0.0.1:3002/ || true)
           echo "node :3002 / → $code"
-          [ "$code" = "200" ] || { echo "::error::rmz-сервис не отвечает 200 — nginx не переключаю"; sudo journalctl -u rmz -n 40 --no-pager || true; exit 1; }
+          [ "$code" = "200" ] || { echo "::error::rmz-сервис не отвечает 200 — nginx не переключаю"; sudo journalctl -u rmz -n 40 --no-pager -o cat || true; exit 1; }
           if [ -d /etc/nginx/sites-available ]; then
             DEST=/etc/nginx/sites-available/rmz.conf
             ENABLE=/etc/nginx/sites-enabled/rmz.conf
@@ -235,5 +236,7 @@ jobs:
       - name: On failure — журналы прода
         if: failure()
         run: |
-          ssh rmz "sudo systemctl status rmz --no-pager -l" 2>&1 || true
-          ssh rmz "sudo journalctl -u rmz -n 80 --no-pager" 2>&1 || true
+          # Без `systemctl status` (печатает путь юнита и хвост журнала с хостнеймом)
+          # и без времени/хостнейма в journalctl — лог публичный (D-038, G290).
+          ssh rmz "sudo systemctl show rmz -p ActiveState -p SubState -p Result -p ExecMainStatus -p NRestarts" 2>&1 || true
+          ssh rmz "sudo journalctl -u rmz -n 80 --no-pager -o cat" 2>&1 || true

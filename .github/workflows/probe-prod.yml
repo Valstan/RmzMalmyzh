@@ -1,7 +1,7 @@
 name: Probe prod (manual)
 
 # Диагностика с бокса (с dev-машин HTTP-пробы глохнут — G147):
-# внешняя петля бокс -> прокси Джино -> бокс, ACME-путь, TLS-CN.
+# внешняя петля бокс -> прокси хостера -> бокс, ACME-путь, TLS-CN.
 
 on:
   workflow_dispatch:
@@ -65,9 +65,9 @@ jobs:
           MAINPID=$(systemctl show -p MainPID --value rmz)
           sudo cat "/proc/$MAINPID/environ" 2>/dev/null | tr '\0' '\n' | grep -E '^(SMTP_|SMARTCAPTCHA_)' | sed 's/=.*/=***/' || echo "нет переменных в процессе"
           echo "== журнал rmz: почта/заявки/анкеты (последние 100 строк) =="
-          journalctl -u rmz -n 400 --no-pager | grep -iE "smtp|email|mail|zayavka|rezyume|nodemailer|535|EAUTH|ECONN" | tail -100 || echo "совпадений нет"
+          journalctl -u rmz -n 400 --no-pager -o cat | grep -iE "smtp|email|mail|zayavka|rezyume|nodemailer|535|EAUTH|ECONN" | tail -100 || echo "совпадений нет"
           echo "== последние 30 строк журнала как есть =="
-          journalctl -u rmz -n 30 --no-pager
+          journalctl -u rmz -n 30 --no-pager -o cat
           REMOTE
 
       # Профилактика G234 (письмо brain 2026-08-08): гонка keep-alive между

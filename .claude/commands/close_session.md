@@ -32,7 +32,7 @@ gh pr list --state open
 1. **Гейты** (если трогался код): `corepack pnpm lint && corepack pnpm typecheck && corepack pnpm build`. С стадии 2 сборка требует Postgres (`.env`, см. `.env.example`) — Payload лезет в БД на пререндере.
 2. **NUL-чек** (грабля харнесса): `git add -A && git diff --cached --stat` — любой исходник как `Bin` → вычистить NUL и пересохранить UTF-8 (`AGENTS.md` §Session-память, «после обрыва»).
 3. Ветка `feat/ fix/ chore/ docs/ refactor/` → коммит → `git push -u origin <ветка>` → `gh pr create` → `gh pr checks <PR> --watch` → CI зелёный → **мерж** `gh pr merge --squash --delete-branch`. Гейты вместо «окей», защита `main`, список обязательных проверок — `AGENTS.md` §Гейты и деплой (одна копия). Коммит-сообщение — файлом (`git commit -F`, D-046).
-   - ⚠️ Мерж в `main` **авто-деплоит на прод** (`deploy-prod.yml`, Бокс Сабантуя) со смоуком #011. После мержа проверить, что смоук зелёный.
+   - ⚠️ Мерж в `main` **авто-деплоит на прод** (`deploy-prod.yml`) со смоуком #011. После мержа проверить, что смоук зелёный.
    - ⚠️ С этой машины (PC40) SSH на бокс режется на banner exchange — вся диагностика прода только через Actions (`probe-prod.yml`).
 
 ## Шаг 4. Обновить живой бэклог `docs/AUDIT-rmz43.md`
@@ -87,4 +87,4 @@ cd ../brain_matrica && git status --short && cd -   # чисто
 - ❌ `git push origin main` напрямую; `--force` / `reset --hard` по `main`.
 - ❌ Писать/коммитить в `../brain_matrica/`.
 - ❌ Оставлять незапушенные ветки/коммиты или висящий `git stash`.
-- ❌ Поднимать на боксе **лишние** Node-процессы: у сайта ровно один сервис `rmz` (:3002, `MemoryMax=512M`) — третий жилец рядом с `sabantuy` (:3000) и `kazanskaya` (:3001) на 1.5 ГиБ без swap.
+- ❌ Поднимать на боксе **лишние** Node-процессы: у сайта ровно один сервис `rmz` с лимитом памяти, бокс общий и без swap.
