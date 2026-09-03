@@ -34,6 +34,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+      # Чистая логика (разбор стены VK) — числами на фикстуре, без БД (#098).
+      - run: pnpm test
       - uses: actions/cache@v4
         with:
           path: public/images/wp
@@ -61,6 +63,8 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rmz_build
           PAYLOAD_SECRET: ci-build-only-secret-not-used-at-runtime
+          # Ключ приёмника ленты — только для гейта ниже; в проде свой, из rmz.env.
+          NOVOSTI_INGEST_KEY: ci-ingest-key-not-a-secret
         run: |
           set -eo pipefail
           pnpm payload run src/seed/seedFromStage1.ts
@@ -169,6 +173,85 @@ jobs:
           grep -q '"copy":true' copy.json || { echo "::error::валидный одиночный адрес не прошёл проверку: $(cat copy.json)"; exit 1; }
 
           echo "✅ формы: заявка и анкета пишутся в БД, honeypot глушит, 400 и 413 отдаются, рассылка на список адресов отвергнута"
+
+          # ── Приёмник ленты новостей: POST /api/ingest/novosti/ ───────────────
+          # Полный путь без шлюза: фикстура стены → нормализация → черновики в
+          # novosti + картинки в media. Ссылки на фото подменяются на картинки,
+          # которые отдаёт этот же сервер, — скачивание проверяется по-настоящему.
+          echo "== лента: доставка фикстуры стены =="
+          python3 - <<'PY'
+          import json
+          w = json.load(open('src/lib/novosti/fixtures/wall.sample.json', encoding='utf-8'))
+          local = ['http://127.0.0.1:3000/images/wp/2020/03/3d6.jpg',
+                   'http://127.0.0.1:3000/images/wp/2020/03/3d6-500x250.jpg']
+          n = 0
+          def patch(item):
+              global n
+              for a in item.get('attachments') or []:
+                  # Один адрес на ФОТО, а не на размер: приёмник дедуплицирует
+                  # одинаковые URL внутри поста, и два фото слились бы в одно.
+                  sizes = (a.get('photo') or {}).get('sizes') or []
+                  if sizes:
+                      for s in sizes:
+                          s['url'] = local[n % 2]
+                      n += 1
+              for c in item.get('copy_history') or []:
+                  patch(c)
+          for it in w['items']:
+              patch(it)
+          json.dump({'source': 'items', 'items': w['items']}, open('ingest.json', 'w', encoding='utf-8'), ensure_ascii=False)
+          PY
+          M0=$(zq "SELECT count(*) FROM media")
+          # Ключ — из env шага через переменную: литерал в -H красит gitleaks
+          # (curl-auth-header), хотя секрета тут нет.
+          IK="X-Ingest-Key: $NOVOSTI_INGEST_KEY"
+          CODE=$(curl -s -o ing.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -H "$IK" --data-binary @ingest.json \
+            http://127.0.0.1:3000/api/ingest/novosti/)
+          echo "POST /api/ingest/novosti/ → $CODE $(cat ing.json)"
+          [ "$CODE" = "200" ] || { echo "::error::приёмник ответил $CODE"; tail -60 server.log; exit 1; }
+          python3 -c "
+          import json,sys; r=json.load(open('ing.json'))
+          assert r['ok'] is True, r
+          assert len(r['created'])==3, r['created']
+          assert sorted(s['reason'] for s in r['skipped'])==['ads','empty'], r['skipped']
+          assert r['warnings']==[], r['warnings']
+          print('created', r['created'])
+          "
+          N=$(zq "SELECT count(*) FROM novosti")
+          [ "$N" = "3" ] || { echo "::error::в novosti $N записей, ожидалось 3"; exit 1; }
+          D=$(zq "SELECT count(*) FROM novosti WHERE _status = 'draft'")
+          [ "$D" = "3" ] || { echo "::error::черновиков $D из 3 — импортёр опубликовал сам"; exit 1; }
+          V=$(zq "SELECT count(*) FROM novosti WHERE source = 'vk' AND vk_post_id LIKE '-195583920_%'")
+          [ "$V" = "3" ] || { echo "::error::source/vk_post_id заполнены не у всех: $V"; exit 1; }
+          M1=$(zq "SELECT count(*) FROM media")
+          [ "$((M1 - M0))" = "3" ] || { echo "::error::картинок в media добавилось $((M1 - M0)), ожидалось 3"; exit 1; }
+          C=$(zq "SELECT count(*) FROM novosti WHERE cover_id IS NOT NULL")
+          [ "$C" = "2" ] || { echo "::error::обложка стоит у $C постов, ожидалось 2 (у поста без фото её нет)"; exit 1; }
+
+          echo "== лента: повторная доставка — ни дублей, ни новых картинок =="
+          curl -s -o ing2.json -X POST -H 'Content-Type: application/json' \
+            -H "$IK" --data-binary @ingest.json \
+            http://127.0.0.1:3000/api/ingest/novosti/
+          python3 -c "
+          import json; r=json.load(open('ing2.json'))
+          assert r['created']==[] and len(r['exists'])==3, r
+          "
+          [ "$(zq "SELECT count(*) FROM novosti")" = "3" ] || { echo "::error::повтор наплодил дубли"; exit 1; }
+          [ "$(zq "SELECT count(*) FROM media")" = "$M1" ] || { echo "::error::повтор перекачал картинки"; exit 1; }
+
+          echo "== лента: неверный ключ — 401, без ключа — 401, мусор — 400 =="
+          WRONG="X-Ingest-Key: ${NOVOSTI_INGEST_KEY}x"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -H "$WRONG" --data-binary @ingest.json http://127.0.0.1:3000/api/ingest/novosti/)
+          [ "$CODE" = "401" ] || { echo "::error::неверный ключ принят с кодом $CODE"; exit 1; }
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            --data-binary @ingest.json http://127.0.0.1:3000/api/ingest/novosti/)
+          [ "$CODE" = "401" ] || { echo "::error::запрос без ключа принят с кодом $CODE"; exit 1; }
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -H "$IK" -d '{"source":"nope"}' http://127.0.0.1:3000/api/ingest/novosti/)
+          [ "$CODE" = "400" ] || { echo "::error::мусорное тело принято с кодом $CODE"; exit 1; }
+          echo "✅ лента: фикстура стены → 3 черновика с картинками, реклама и пустой пропущены, повтор идемпотентен, ключ проверяется"
 
   # Импорт харвест-картинок в коллекцию media (аудит §4.2) проверяется здесь и
   # только здесь: на dev-машине PC40 нет ни Postgres, ни Docker, а вторая живая
