@@ -229,7 +229,9 @@ jobs:
           # Оба списка контента — лента и техническая библиотека. Оба читают БД
           # в рантайме, поэтому 500 здесь означает сломанный доступ к данным, а
           # 404 — что маршрут не доехал в релиз; смоук главной этого не ловит.
-          for P in /novosti/ /stati/; do
+          # Иконка вкладки — тоже маршрут сборки (src/app/icon.png и favicon.ico),
+          # а не файл в public: пропадёт из релиза — вернётся 404 на каждой странице.
+          for P in /novosti/ /stati/ /icon.png /favicon.ico; do
             c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -H "$H" -H "X-Forwarded-Proto: https" "http://127.0.0.1$P")
             echo "$P → $c"
             [ "$c" = "200" ] || { echo "::error::$P вернул $c"; exit 1; }
