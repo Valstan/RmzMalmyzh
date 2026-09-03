@@ -77,7 +77,8 @@ export const Pages: CollectionConfig<'pages'> = {
       defaultValue: false,
       admin: {
         position: 'sidebar',
-        description: 'Посты попадают в ленту /novosti/ и получают разметку TechArticle.',
+        description:
+          'Страница попадает в «Технические статьи» /stati/ и получает разметку TechArticle. Заводская хроника 2020–2026 тоже помечена этой галкой, но показывается в ленте /novosti/ — она перечислена списком в src/lib/novosti/legacy.ts.',
       },
     },
     {

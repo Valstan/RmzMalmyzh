@@ -253,6 +253,81 @@ jobs:
           [ "$CODE" = "400" ] || { echo "::error::мусорное тело принято с кодом $CODE"; exit 1; }
           echo "✅ лента: фикстура стены → 3 черновика с картинками, реклама и пустой пропущены, повтор идемпотентен, ключ проверяется"
 
+          # ── Витрина ленты: /novosti/ и /stati/ ──────────────────────────────
+          # Два списка строятся из одного признака `isPost` плюс рукописный
+          # список жанров (src/lib/novosti/legacy.ts). Ошибка в списке или в
+          # фильтре — и запись молча проваливается между разделами либо
+          # техстатья уезжает в новостную ленту завода.
+          curl -sL http://127.0.0.1:3000/novosti/ -o feed1.html
+          curl -sL 'http://127.0.0.1:3000/novosti/?page=2' -o feed2.html
+          curl -sL http://127.0.0.1:3000/stati/ -o stati.html
+
+          echo "== лента и статьи не пересекаются =="
+          for T in "Митинг в честь Дня Победы" "Передовики производства"; do
+            grep -qF "$T" feed1.html || { echo "::error::в ленте нет хроники «$T»"; exit 1; }
+            if grep -qF "$T" stati.html; then echo "::error::хроника «$T» попала в технические статьи"; exit 1; fi
+          done
+          for T in "Приборы и муфты дизеля Д6" "Эксплуатация дизеля Д6"; do
+            grep -qF "$T" stati.html || { echo "::error::в /stati/ нет статьи «$T»"; exit 1; }
+            if grep -qF "$T" feed1.html; then echo "::error::техстатья «$T» попала в ленту новостей"; exit 1; fi
+          done
+          grep -qF "День Поля-2020" feed2.html || { echo "::error::вторая страница ленты не отдаёт старые записи"; exit 1; }
+
+          echo "== адреса записей не менялись, у каждой есть вход в свой раздел =="
+          for P in /den-polya-2020/ /pribory-i-mufty-dizelya-d6/; do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:3000$P")
+            [ "$CODE" = "200" ] || { echo "::error::$P отдаёт $CODE вместо 200 — адрес записи переехал"; exit 1; }
+          done
+          curl -sL http://127.0.0.1:3000/den-polya-2020/ -o hronika.html
+          grep -q 'href="/novosti/"' hronika.html || { echo "::error::у хроники нет крошки в ленту"; exit 1; }
+          curl -sL http://127.0.0.1:3000/pribory-i-mufty-dizelya-d6/ -o statya.html
+          grep -q 'href="/stati/"' statya.html || { echo "::error::у техстатьи нет крошки в /stati/"; exit 1; }
+          grep -q 'href="/stati/"' home.html || { echo "::error::на сайт нет входа в /stati/ (подвал)"; exit 1; }
+
+          echo "== черновик ленты не виден нигде =="
+          # Локальный API Payload ходит с overrideAccess: true, поэтому access-контроль
+          # фронт НЕ защищает — статус фильтруется руками в src/lib/cms.ts. Уберут
+          # фильтр — сюда потекут неопубликованные посты из ВКонтакте.
+          SL=$(zq "SELECT slug FROM novosti ORDER BY id LIMIT 1")
+          [ -n "$SL" ] || { echo "::error::в novosti нет записей — ingest-гейт выше не отработал"; exit 1; }
+          if grep -qF "$SL" feed1.html; then echo "::error::черновик $SL показан в ленте"; exit 1; fi
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:3000/novosti/$SL/")
+          [ "$CODE" = "404" ] || { echo "::error::страница черновика отдала $CODE вместо 404"; exit 1; }
+          if grep -qF "$SL" sitemap.out; then echo "::error::черновик $SL попал в sitemap"; exit 1; fi
+
+          echo "== опубликованная запись появляется в ленте, на своей странице и в карте =="
+          zq "UPDATE novosti SET _status = 'published' WHERE slug = '$SL'" > /dev/null
+          curl -sL http://127.0.0.1:3000/novosti/ -o feed3.html
+          grep -qF "$SL" feed3.html || { echo "::error::опубликованная запись не появилась в ленте"; exit 1; }
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:3000/novosti/$SL/")
+          [ "$CODE" = "200" ] || { echo "::error::страница опубликованной записи отдала $CODE"; exit 1; }
+
+          echo "== кириллический адрес записи не ломает ни страницу, ни карту =="
+          # Не-ASCII в пути живёт только percent-encoded. Незакодированный адрес
+          # в заголовке ответа роняет Node (ERR_INVALID_CHAR), а в <loc> карты
+          # он невалиден по спецификации sitemap.
+          zq "UPDATE novosti SET slug = 'митинг-проба' WHERE slug = '$SL'" > /dev/null
+          ENC=$(python3 -c "import urllib.parse;print(urllib.parse.quote('митинг-проба'))")
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:3000/novosti/$ENC/")
+          [ "$CODE" = "200" ] || { echo "::error::запись с кириллическим адресом отдала $CODE"; exit 1; }
+          curl -sL http://127.0.0.1:3000/sitemap.xml -o sitemap2.out
+          grep -qF "/novosti/$ENC/" sitemap2.out || { echo "::error::в sitemap адрес записи не percent-encoded"; exit 1; }
+
+          echo "== карта без дублей, llms.txt знает про статьи =="
+          DUP=$(grep -o '<loc>[^<]*</loc>' sitemap2.out | sort | uniq -d || true)
+          [ -z "$DUP" ] || { echo "::error::в sitemap повторяются адреса: $DUP"; exit 1; }
+          grep -qF "/novosti/" sitemap2.out || { echo "::error::в sitemap нет ленты"; exit 1; }
+          grep -qF "/stati/" sitemap2.out || { echo "::error::в sitemap нет /stati/"; exit 1; }
+          curl -sL http://127.0.0.1:3000/llms.txt -o llms2.out
+          grep -qF "/stati/" llms2.out || { echo "::error::в llms.txt нет технической библиотеки"; exit 1; }
+
+          echo "== мусор в номере страницы не роняет ленту =="
+          for Q in "page=abc" "page=0" "page=-3" "page=99999" "page=1e9"; do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:3000/novosti/?$Q")
+            [ "$CODE" = "200" ] || { echo "::error::/novosti/?$Q отдал $CODE"; exit 1; }
+          done
+          echo "✅ витрина: два списка не пересекаются, адреса записей на месте, черновики скрыты, кириллический адрес и мусор в пагинации отработаны"
+
   # Импорт харвест-картинок в коллекцию media (аудит §4.2) проверяется здесь и
   # только здесь: на dev-машине PC40 нет ни Postgres, ни Docker, а вторая живая
   # база — прод. Поэтому гейт скрипта, который будет править контент прода, —

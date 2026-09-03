@@ -181,14 +181,35 @@ export const normalizeWall = (items: unknown, ownerId: number = RMZ_OWNER_ID): N
   return { posts, skipped }
 }
 
+const TRANSLIT: Readonly<Record<string, string>> = {
+  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i',
+  й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't',
+  у: 'u', ф: 'f', х: 'h', ц: 'c', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '',
+  э: 'e', ю: 'yu', я: 'ya',
+}
+
+/**
+ * Кириллица → латиница для адресов.
+ *
+ * Все 128 адресов сайта латинские (WordPress транслитерировал их при переносе),
+ * и лента не должна выбиваться. Дело не в красоте: не-ASCII в пути живёт в URL
+ * только percent-encoded, а значит попадает в таком виде в sitemap, в отчёты
+ * Метрики и в любую строку, которую собирает код. Заголовок HTTP не принимает
+ * не-ASCII вовсе — `res.setHeader('location', '/новости/…')` бросает
+ * ERR_INVALID_CHAR, то есть редирект на такой адрес отдал бы 500 вместо перехода.
+ */
+export const translit = (s: string): string =>
+  [...s.toLowerCase()].map((ch) => TRANSLIT[ch] ?? ch).join('')
+
 /** Slug поста: из заголовка плюс номер поста — заголовки в ленте повторяются («С праздником!»). */
 export const slugFor = (post: NormalizedPost): string => {
-  const base = post.title
-    .toLowerCase()
+  const base = translit(post.title)
     .replace(/\s+/g, '-')
-    .replace(/[^\p{L}\p{N}-]+/gu, '')
+    .replace(/[^a-z0-9-]+/g, '')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
+    .slice(0, 70)
+    .replace(/-$/, '')
   const num = post.vkPostId.split('_')[1] ?? ''
   return `${base || 'post'}-${num}`
 }
