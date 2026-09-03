@@ -1,0 +1,125 @@
+# Импорт постов стены vk.ru/rmz43 в ленту новостей (черновиками) — боевой прогон.
+#
+# Как устроено. Сайт сам ходит в шлюз SARAFAN (роут `POST /api/ingest/novosti/`,
+# форма `source: gateway`): с раннера GitHub хост шлюза недоступен (таймаут,
+# run 33680848596), а бокс и Сетка у одного хостера. Воркфлоу лишь дёргает роут
+# **с бокса через localhost** — ключ приёмника `NOVOSTI_INGEST_KEY` живёт только
+# в /etc/rmz/rmz.env и никуда не уезжает: ни в GitHub, ни в лог.
+#
+# Первый прогон: ключа в env нет → генерируется на боксе (`openssl rand -hex 32`),
+# дописывается в rmz.env, юнит перезапускается (Node читает env при старте).
+# Дальше — только вызов. Значение ключа в логе не печатается никогда.
+#
+# Ничего не публикует: посты приезжают черновиками, публикует редактор в /admin.
+# Повторный прогон идемпотентен — уже привезённые посты не трогаются.
+name: Import novosti (prod, drafts)
+
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: 'Сколько последних постов стены забрать (1–100)'
+        type: number
+        default: 20
+      offset:
+        description: 'Смещение по стене (для докачки истории)'
+        type: number
+        default: 0
+
+concurrency:
+  group: rmz-prod-ssh
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+        run: |
+          set -e
+          if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$DEPLOY_SSH_HOST" ] || [ -z "$DEPLOY_SSH_PORT" ]; then
+            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / secrets.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519_rmz
+          chmod 600 ~/.ssh/id_ed25519_rmz
+          ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat > ~/.ssh/config <<CFG
+          Host rmz
+            HostName $DEPLOY_SSH_HOST
+            Port $DEPLOY_SSH_PORT
+            User valstan
+            IdentityFile ~/.ssh/id_ed25519_rmz
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+          CFG
+          chmod 600 ~/.ssh/config
+
+      - name: Ключ приёмника есть в env (иначе создать и перезапустить)
+        run: |
+          set -eo pipefail
+          ssh rmz 'sudo bash -s' <<'REMOTE'
+          set -e
+          ENV=/etc/rmz/rmz.env
+          test -f "$ENV" || { echo "::error::env-файла прода нет — сначала setup-prod-stage2.yml"; exit 1; }
+          grep -q '^SARAFAN_GATEWAY_KEY=.\{8,\}' "$ENV" || { echo "::error::SARAFAN_GATEWAY_KEY не задан — сначала apply-gateway-key.yml (mode=apply)"; exit 1; }
+          if grep -q '^NOVOSTI_INGEST_KEY=.\{16,\}' "$ENV"; then
+            echo "NOVOSTI_INGEST_KEY уже задан"
+          else
+            umask 077
+            KEY=$(openssl rand -hex 32)
+            sed -i '/^NOVOSTI_INGEST_KEY=/d' "$ENV"
+            echo "NOVOSTI_INGEST_KEY=$KEY" >> "$ENV"
+            chown root:valstan "$ENV"; chmod 640 "$ENV"
+            systemctl restart rmz
+            echo "NOVOSTI_INGEST_KEY создан, юнит перезапущен"
+            sleep 8
+          fi
+          systemctl is-active rmz
+          REMOTE
+
+      - name: Импорт через localhost
+        env:
+          COUNT: ${{ inputs.count }}
+          OFFSET: ${{ inputs.offset }}
+        run: |
+          set -eo pipefail
+          printf '{"source":"gateway","count":%s,"offset":%s}' "${COUNT:-20}" "${OFFSET:-0}" > body.json
+          scp -q body.json rmz:/tmp/novosti-body.json
+          ssh rmz 'sudo bash -s' <<'REMOTE' | tee result.json
+          set -eo pipefail
+          ENV=/etc/rmz/rmz.env
+          KEY=$(grep '^NOVOSTI_INGEST_KEY=' "$ENV" | sed 's/^NOVOSTI_INGEST_KEY=//')
+          PORT=$(grep '^PORT=' "$ENV" | sed 's/^PORT=//'); PORT=${PORT:-3002}
+          # 401/503 — тоже результат, поэтому код и тело отдельно; --max-time с запасом:
+          # роут качает картинки постов последовательно.
+          code=$(curl -s -o /tmp/novosti-result.json -w '%{http_code}' --max-time 600 \
+            -X POST -H 'Content-Type: application/json' -H "X-Ingest-Key: $KEY" \
+            --data-binary @/tmp/novosti-body.json "http://127.0.0.1:$PORT/api/ingest/novosti/")
+          rm -f /tmp/novosti-body.json
+          cat /tmp/novosti-result.json; echo
+          rm -f /tmp/novosti-result.json
+          [ "$code" = "200" ] || { echo "::error::приёмник ответил $code"; exit 1; }
+          REMOTE
+
+      - name: Итог
+        run: |
+          set -eo pipefail
+          python3 - <<'PY'
+          import json, sys
+          raw = open('result.json', encoding='utf-8').read().strip().splitlines()
+          r = json.loads([l for l in raw if l.startswith('{')][-1])
+          print(f"получено {r.get('received')}, создано черновиков {len(r.get('created', []))}, уже были {len(r.get('exists', []))}, пропущено {len(r.get('skipped', []))}, не удалось {len(r.get('failed', []))}")
+          for s in r.get('skipped', []): print('  пропуск', s)
+          for w in r.get('warnings', []): print('  ⚠️', w)
+          for f in r.get('failed', []): print('  ❌', f)
+          sys.exit(0 if r.get('ok') else 1)
+          PY
+          echo "Дальше: /admin → Лента новостей → просмотреть черновики и опубликовать нужные."
