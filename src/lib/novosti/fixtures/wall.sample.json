@@ -1,0 +1,83 @@
+{
+  "count": 5,
+  "items": [
+    {
+      "id": 1001,
+      "owner_id": -195583920,
+      "from_id": -195583920,
+      "date": 1755680400,
+      "post_type": "post",
+      "text": "Отгрузили двигатель Д-240 после капитального ремонта.\r\n\r\n\r\nЗаказчик — хозяйство из [club777|Кильмезского района]. Спасибо за доверие!  \n#ремонт@rmz43 #Д240",
+      "marked_as_ads": 0,
+      "attachments": [
+        {
+          "type": "photo",
+          "photo": {
+            "id": 5001,
+            "owner_id": -195583920,
+            "sizes": [
+              { "type": "s", "url": "https://img.example/a-s.jpg", "width": 75, "height": 56 },
+              { "type": "x", "url": "https://img.example/a-x.jpg", "width": 604, "height": 453 },
+              { "type": "w", "url": "https://img.example/a-w.jpg", "width": 1280, "height": 960 }
+            ]
+          }
+        },
+        {
+          "type": "photo",
+          "photo": {
+            "id": 5002,
+            "owner_id": -195583920,
+            "sizes": [
+              { "type": "m", "url": "https://img.example/b-m.jpg", "width": 130, "height": 97 },
+              { "type": "y", "url": "https://img.example/b-y.jpg", "width": 807, "height": 605 }
+            ]
+          }
+        },
+        { "type": "link", "link": { "url": "https://example.org" } }
+      ]
+    },
+    {
+      "id": 1002,
+      "owner_id": -195583920,
+      "date": 1755594000,
+      "text": "",
+      "attachments": [],
+      "copy_history": [
+        {
+          "id": 77,
+          "owner_id": -123,
+          "date": 1755500000,
+          "text": "Поздравляем коллектив завода с Днём машиностроителя!",
+          "attachments": [
+            {
+              "type": "photo",
+              "photo": {
+                "sizes": [{ "type": "x", "url": "https://img.example/repost.jpg", "width": 600, "height": 400 }]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1003,
+      "owner_id": -195583920,
+      "date": 1755507600,
+      "text": "Купите наши запчасти со скидкой",
+      "marked_as_ads": 1
+    },
+    {
+      "id": 1004,
+      "owner_id": -195583920,
+      "date": 1755421200,
+      "text": "",
+      "attachments": [{ "type": "video", "video": { "id": 1 } }]
+    },
+    {
+      "id": 1005,
+      "owner_id": -195583920,
+      "date": 1755334800,
+      "text": "#вакансии\nТребуется токарь. Оплата сдельная, соцпакет, доставка транспортом предприятия из Кильмези и Вятских Полян. Звоните в отдел кадров, телефон на сайте, будем рады видеть вас в нашем коллективе уже на этой неделе."
+    }
+  ]
+}
