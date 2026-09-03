@@ -86,10 +86,15 @@ test('normalizeWall: мусор вместо элементов не роняе�
   assert.equal(normalizeWall('not-an-array').posts.length, 0)
 })
 
-test('slugFor: кириллица сохраняется, номер поста делает slug уникальным', () => {
+test('slugFor: адрес латинский и ASCII, номер поста делает slug уникальным', () => {
   const { posts } = normalizeWall(wall.items)
-  assert.equal(slugFor(posts[2]), 'требуется-токарь-1005')
+  assert.equal(slugFor(posts[2]), 'trebuetsya-tokar-1005')
   assert.equal(slugFor({ ...posts[2], title: '!!!' }), 'post-1005')
+  // Длинный заголовок не даёт бесконечный адрес и не кончается дефисом.
+  const long = slugFor({ ...posts[2], title: 'Очень длинный заголовок '.repeat(10) })
+  assert.ok(long.length <= 80, `длина ${long.length}`)
+  assert.ok(!/--/.test(long) && !/-\d+$/.test(long.replace(/-1005$/, '')), long)
+  assert.ok(/^[a-z0-9-]+$/.test(long), `не-ASCII в адресе: ${long}`)
 })
 
 test('secretMatches: пустой ожидаемый секрет всегда false, длина и байты сравниваются', () => {

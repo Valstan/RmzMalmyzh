@@ -1,6 +1,6 @@
 import Link from "next/link";
 import OrderFormV2 from "@/components/v2/OrderFormV2";
-import { getFaq, getPosts } from "@/lib/cms";
+import { getFaq, getFeed } from "@/lib/cms";
 import { SITE } from "@/lib/site";
 import { ENGINE_GROUPS, OTHER_SERVICES, PROCESS_STEPS, V2_STATS } from "@/lib/v2/catalog";
 
@@ -12,8 +12,8 @@ import { ENGINE_GROUPS, OTHER_SERVICES, PROCESS_STEPS, V2_STATS } from "@/lib/v2
 export const dynamic = "force-dynamic";
 
 export default async function V2Home() {
-  const [posts, faq] = await Promise.all([getPosts(), getFaq()]);
-  const news = posts.slice(0, 3);
+  const [feed, faq] = await Promise.all([getFeed(), getFaq()]);
+  const news = feed.slice(0, 3);
   const topFaq = faq.slice(0, 5);
 
   return (
@@ -123,7 +123,7 @@ export default async function V2Home() {
           <div className="v2-container py-20">
             <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
-                <p className="v2-label">Новости и статьи</p>
+                <p className="v2-label">Новости</p>
                 <h2 className="mt-3 text-3xl md:text-4xl">Что нового на заводе</h2>
               </div>
               <Link href="/novosti/" className="font-semibold text-[var(--v2-accent)] hover:underline">
@@ -131,14 +131,12 @@ export default async function V2Home() {
               </Link>
             </div>
             <div className="mt-10 grid gap-5 md:grid-cols-3">
-              {news.map((p) => (
-                <Link key={p.id} href={p.path} className="v2-card block">
-                  {p.publishedAt && (
-                    <p className="text-xs text-[var(--v2-muted)]">
-                      {new Date(p.publishedAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}
-                    </p>
-                  )}
-                  <h3 className="mt-2 text-lg leading-snug">{p.h1}</h3>
+              {news.map((it) => (
+                <Link key={it.key} href={it.href} className="v2-card block">
+                  <p className="text-xs text-[var(--v2-muted)]">
+                    {new Date(it.publishedAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}
+                  </p>
+                  <h3 className="mt-2 text-lg leading-snug">{it.title}</h3>
                 </Link>
               ))}
             </div>

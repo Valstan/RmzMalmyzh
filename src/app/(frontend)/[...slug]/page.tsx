@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import ContactForm from "@/components/ContactForm";
 import ContentHtml from "@/components/ContentHtml";
 import { getAllPages, getPage } from "@/lib/cms";
+import { legacyGenre } from "@/lib/novosti/legacy";
 import { OG_DEFAULT_IMAGE, SITE } from "@/lib/site";
 import type { Page } from "@/payload-types";
 
@@ -44,8 +45,22 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   };
 }
 
-function Breadcrumbs({ slug, pages }: { slug: string; pages: Page[] }) {
-  const segs = slug.split("/").filter(Boolean);
+/**
+ * Раздел-родитель для записи стадии 1. Все 42 такие страницы лежат в корне
+ * (`/den-polya-2020/`), поэтому по пути родителя не вычислить — берём из жанра:
+ * хроника принадлежит ленте, техстатья — библиотеке. Без этой крошки оба списка
+ * остаются без единой входящей ссылки с самих записей.
+ */
+function parentOf(page: Page): { href: string; label: string } | null {
+  if (!page.isPost) return null;
+  return legacyGenre(page.path) === "hronika"
+    ? { href: "/novosti/", label: "Новости" }
+    : { href: "/stati/", label: "Технические статьи" };
+}
+
+function Breadcrumbs({ page, pages }: { page: Page; pages: Page[] }) {
+  const segs = page.path.split("/").filter(Boolean);
+  const parent = parentOf(page);
   const crumbs = segs.map((_, i) => {
     const href = "/" + segs.slice(0, i + 1).join("/") + "/";
     const p = pages.find((x) => x.path === href);
@@ -54,6 +69,12 @@ function Breadcrumbs({ slug, pages }: { slug: string; pages: Page[] }) {
   return (
     <nav aria-label="Хлебные крошки" className="text-sm text-neutral-500 mb-4">
       <Link href="/" className="hover:text-[var(--accent)]">Главная</Link>
+      {parent && (
+        <span>
+          {" / "}
+          <Link href={parent.href} className="hover:text-[var(--accent)]">{parent.label}</Link>
+        </span>
+      )}
       {crumbs.map((c) => (
         <span key={c.href}>
           {" / "}
@@ -68,16 +89,21 @@ function Breadcrumbs({ slug, pages }: { slug: string; pages: Page[] }) {
 function jsonLd(page: Page, pages: Page[]) {
   const base = process.env.NEXT_PUBLIC_SITE_URL || "https://xn--g1ajl.xn--80adkdyec4j.xn--p1ai";
   const segs = page.path.split("/").filter(Boolean);
+  const parent = parentOf(page);
+  const trail = [
+    { "@type": "ListItem", position: 1, name: "Главная", item: base + "/" },
+    ...(parent ? [{ "@type": "ListItem", position: 2, name: parent.label, item: base + parent.href }] : []),
+  ];
   const graph: object[] = [
     {
       "@type": "BreadcrumbList",
       itemListElement: [
-        { "@type": "ListItem", position: 1, name: "Главная", item: base + "/" },
+        ...trail,
         ...segs.map((_, i) => {
           const href = "/" + segs.slice(0, i + 1).join("/") + "/";
           return {
             "@type": "ListItem",
-            position: i + 2,
+            position: trail.length + i + 1,
             name: pages.find((x) => x.path === href)?.h1 || segs[i],
             item: base + href,
           };
@@ -109,8 +135,10 @@ function jsonLd(page: Page, pages: Page[]) {
 
 export default async function ContentPage({ params }: Props) {
   const slug = await slugOf(params);
-  // Главная и /novosti/ рендерятся своими роутами
-  if (slug === "/" || slug === "/novosti/") notFound();
+  // Главная, лента и список статей рендерятся своими роутами. Маршрутизация
+  // Next и так предпочтёт их этому catch-all; страховка — на случай страницы
+  // с таким же path в БД (запись `/novosti/` стадии 1 существует и осталась).
+  if (slug === "/" || slug === "/novosti/" || slug === "/stati/") notFound();
   const page = await getPage(slug);
   if (!page) notFound();
   const pages = await getAllPages();
@@ -120,7 +148,7 @@ export default async function ContentPage({ params }: Props) {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd(page, pages)) }}
       />
-      <Breadcrumbs slug={slug} pages={pages} />
+      <Breadcrumbs page={page} pages={pages} />
       {page.isPost && page.publishedAt && (
         <p className="text-sm text-neutral-500 mb-2">
           {new Date(page.publishedAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}

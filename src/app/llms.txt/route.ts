@@ -1,4 +1,4 @@
-import { getAllPages, getPosts } from "@/lib/cms";
+import { getAllPages, getFeed, getStati } from "@/lib/cms";
 import { SITE } from "@/lib/site";
 
 // ISR вместо force-static: CI собирает с пустой БД, список наполняется на проде.
@@ -10,8 +10,7 @@ export const dynamic = "force-dynamic";
 
 /** llms.txt — карта сайта для LLM-краулеров (GEO, аудит §3.1). */
 export async function GET() {
-  const pages = await getAllPages();
-  const posts = await getPosts();
+  const [pages, stati, feed] = await Promise.all([getAllPages(), getStati(), getFeed()]);
   const services = pages.filter((p) => p.path.startsWith("/uslugi/") && !p.isPost);
   const products = pages.filter((p) => p.path.startsWith("/produkciya/") && !p.isPost);
   const lines = [
@@ -27,13 +26,15 @@ export async function GET() {
     "## Продукция",
     ...products.map((p) => `- [${p.h1}](${SITE.url}${p.path})`),
     "",
-    "## Техническая библиотека (статьи)",
-    ...posts.slice(0, 20).map((p) => `- [${p.h1}](${SITE.url}${p.path})`),
+    `## Техническая библиотека — устройство и обслуживание дизелей Д6 (${SITE.url}/stati/)`,
+    ...stati.map((p) => `- [${p.h1}](${SITE.url}${p.path})`),
+    "",
+    `## Новости завода (${SITE.url}/novosti/)`,
+    ...feed.slice(0, 15).map((it) => `- [${it.title}](${SITE.url}${it.href}) — ${it.publishedAt.slice(0, 10)}`),
     "",
     "## Основное",
     `- [О предприятии](${SITE.url}/o-predpriyatii/)`,
     `- [Контакты](${SITE.url}/kontakty/)`,
-    `- [Новости](${SITE.url}/novosti/)`,
   ];
   return new Response(lines.join("\n"), {
     headers: { "Content-Type": "text/plain; charset=utf-8" },

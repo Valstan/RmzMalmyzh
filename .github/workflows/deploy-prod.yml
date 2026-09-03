@@ -226,6 +226,14 @@ jobs:
           else
             echo "::error::контент-маркер не найден"; exit 1
           fi
+          # Оба списка контента — лента и техническая библиотека. Оба читают БД
+          # в рантайме, поэтому 500 здесь означает сломанный доступ к данным, а
+          # 404 — что маршрут не доехал в релиз; смоук главной этого не ловит.
+          for P in /novosti/ /stati/; do
+            c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -H "$H" -H "X-Forwarded-Proto: https" "http://127.0.0.1$P")
+            echo "$P → $c"
+            [ "$c" = "200" ] || { echo "::error::$P вернул $c"; exit 1; }
+          done
           admin=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "$H" -H "X-Forwarded-Proto: https" http://127.0.0.1/admin)
           echo "/admin → $admin (ожидается 200/30x)"
           case "$admin" in 200|301|302|307|308) ;; *) echo "::error::/admin = $admin"; exit 1;; esac
