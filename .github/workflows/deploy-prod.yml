@@ -22,6 +22,7 @@ on:
       - '**.md'
       - '.claude/**'
       - '.github/workflows/probe-prod.yml'
+      - '.github/workflows/park-prod.yml'
       - '.github/workflows/dump-schema.yml'
       - '.github/workflows/apply-authorize-key.yml'
       - '.github/workflows/setup-prod-stage2.yml'
@@ -154,6 +155,21 @@ jobs:
             ServerAliveInterval 30
           CFG
           chmod 600 ~/.ssh/config
+
+      # Предохранитель парковки (park-prod.yml). Деплой заканчивается
+      # `systemctl restart rmz` — то есть на припаркованном сайте он и запустил
+      # бы, и включил бы юнит обратно, причём молча и зелёным прогоном. Проверка
+      # стоит ДО отправки артефакта: маркер на боксе — единственный источник
+      # правды о парковке, снимает его только park-prod.yml режимом resume.
+      - name: Гейт парковки
+        run: |
+          set -eo pipefail
+          if ssh rmz 'test -f /etc/rmz/PARKED'; then
+            echo "::error::Сайт припаркован (park-prod.yml). Деплой поднял бы его обратно. Сначала resume, потом деплой."
+            ssh rmz 'cat /etc/rmz/PARKED' || true
+            exit 1
+          fi
+          echo "Парковки нет — деплой продолжается."
 
       - name: Ship artifact + restart
         run: |

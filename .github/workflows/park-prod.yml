@@ -1,0 +1,195 @@
+# Парковка прода: остановить сайт целиком и вернуть его обратно.
+#
+# Зачем отдельный воркфлоу. Остановка боевого сайта — операция класса #025
+# (необратимая для посетителя, пока её не отменят): dispatch, обязательное
+# слово-подтверждение, проверка результата прогоном, а не отмашкой.
+#
+# ЧТО ИМЕННО ГЛУШИТСЯ. Только systemd-юнит приложения. Общий nginx бокса
+# НЕ ТРОГАЕТСЯ вовсе: он обслуживает не только нас, и правка его конфига ради
+# нашей паузы поставила бы соседей в зависимость от нашего решения. Итог для
+# посетителя — 502 от nginx (upstream не слушает). Страницы при этом не
+# генерируются вообще: Node выключен, процесса нет, БД никто не трогает.
+#
+# ⚠️ `disable`, А НЕ ПРОСТО `stop`. Юнит стоит в автозапуске, и любая
+# перезагрузка бокса подняла бы сайт обратно молча. Тихий откат чужими руками
+# выглядел бы как «парковка не сработала», хотя воркфлоу отработал верно.
+#
+# ⚠️ МАРКЕР /etc/rmz/PARKED. Второй способ поднять сайт молча — авто-деплой:
+# он заканчивается `systemctl restart rmz`, что и запустило бы, и включило бы
+# юнит обратно. Поэтому парковка кладёт на бокс файл-маркер, а `deploy-prod.yml`
+# первым шагом на боксе об него краснеет. Снять парковку можно только здесь,
+# режимом resume — то есть осознанно.
+#
+# ДАННЫЕ НЕ ТРОГАЮТСЯ: база, медиа и релизы остаются как есть, поэтому resume —
+# это ровно включение юнита, без сборки и без деплоя.
+name: Park prod (stop/resume site)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'park — остановить сайт; resume — вернуть в работу'
+        type: choice
+        options: [park, resume]
+        default: park
+      confirm:
+        description: 'Впишите ОСТАНОВИТЬ для park или ЗАПУСТИТЬ для resume'
+        type: string
+        default: ''
+      reason:
+        description: 'Причина парковки — попадёт в маркер на боксе (необязательно)'
+        type: string
+        default: ''
+
+# Не пересекаться с авто-деплоем: он в это же время меняет current-релиз и
+# перезапускает сервис.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  park:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MODE: ${{ inputs.mode }}
+      REASON: ${{ inputs.reason }}
+
+    steps:
+      - name: Гейт подтверждения
+        run: |
+          set -e
+          echo "режим: $MODE"
+          case "$MODE" in
+            park)
+              [ "${{ inputs.confirm }}" = "ОСТАНОВИТЬ" ] || {
+                echo "::error::Для park нужно вписать ОСТАНОВИТЬ в поле confirm"; exit 1; }
+              ;;
+            resume)
+              [ "${{ inputs.confirm }}" = "ЗАПУСТИТЬ" ] || {
+                echo "::error::Для resume нужно вписать ЗАПУСТИТЬ в поле confirm"; exit 1; }
+              ;;
+            *)
+              echo "::error::неизвестный режим: $MODE"; exit 1 ;;
+          esac
+
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+        run: |
+          set -e
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519_rmz
+          chmod 600 ~/.ssh/id_ed25519_rmz
+          ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat > ~/.ssh/config <<CFG
+          Host rmz
+            HostName $DEPLOY_SSH_HOST
+            Port $DEPLOY_SSH_PORT
+            User valstan
+            IdentityFile ~/.ssh/id_ed25519_rmz
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+          CFG
+          chmod 600 ~/.ssh/config
+
+      - name: Остановить сайт
+        if: inputs.mode == 'park'
+        run: |
+          set -eo pipefail
+          printf '%s\n' "$REASON" > reason.txt
+          scp -q reason.txt rmz:/tmp/rmz-park-reason.txt
+          ssh rmz 'sudo bash -s' <<'REMOTE'
+          set -eo pipefail
+          {
+            echo "parked_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "parked_by=park-prod.yml"
+            echo "reason=$(tr -d '\n' < /tmp/rmz-park-reason.txt)"
+          } > /etc/rmz/PARKED
+          chmod 644 /etc/rmz/PARKED
+          rm -f /tmp/rmz-park-reason.txt
+          # --now = stop + disable одним шагом: и сейчас, и после перезагрузки бокса.
+          systemctl disable --now rmz
+          REMOTE
+
+      - name: Приёмка остановки
+        if: inputs.mode == 'park'
+        run: |
+          set -eo pipefail
+          ssh rmz 'sudo bash -s' <<'REMOTE'
+          set -eo pipefail
+          ACTIVE=$(systemctl show rmz -p ActiveState --value)
+          ENABLED=$(systemctl show rmz -p UnitFileState --value)
+          echo "ActiveState=$ACTIVE UnitFileState=$ENABLED"
+          [ "$ACTIVE" = "inactive" ] || [ "$ACTIVE" = "failed" ] || {
+            echo "::error::юнит rmz всё ещё $ACTIVE — сайт не остановлен"; exit 1; }
+          [ "$ENABLED" = "disabled" ] || {
+            echo "::error::юнит rmz остался $ENABLED — перезагрузка бокса поднимет сайт обратно"; exit 1; }
+          [ -f /etc/rmz/PARKED ] || { echo "::error::маркер /etc/rmz/PARKED не создан — деплой сможет поднять сайт"; exit 1; }
+          echo "-- маркер --"; cat /etc/rmz/PARKED
+          # Порт приложения не должен слушаться никем.
+          if ss -ltn 2>/dev/null | grep -q ':3002 '; then
+            echo "::error::порт приложения всё ещё слушается"; exit 1; fi
+          echo "✅ порт приложения свободен — страницы не генерируются"
+          REMOTE
+
+      - name: Приёмка снаружи — сайт не отдаёт страницу
+        if: inputs.mode == 'park'
+        env:
+          SITE: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+        run: |
+          set -eo pipefail
+          printf '%s\n' "$SITE" > site.txt
+          scp -q site.txt rmz:/tmp/rmz-site.txt
+          ssh rmz 'bash -s' <<'REMOTE'
+          set -eo pipefail
+          SITE=$(tr -d '\n' < /tmp/rmz-site.txt); rm -f /tmp/rmz-site.txt
+          CODE=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 20 "$SITE/" || echo 000)
+          echo "внешняя петля: / -> $CODE"
+          [ "$CODE" != "200" ] || { echo "::error::сайт всё ещё отдаёт 200 — остановка не достигла посетителя"; exit 1; }
+          ADMIN=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 20 "$SITE/admin" || echo 000)
+          echo "внешняя петля: /admin -> $ADMIN"
+          [ "$ADMIN" != "200" ] || { echo "::error::админка всё ещё отвечает 200"; exit 1; }
+          echo "✅ снаружи страница не отдаётся"
+          REMOTE
+
+      - name: Вернуть сайт в работу
+        if: inputs.mode == 'resume'
+        run: |
+          set -eo pipefail
+          ssh rmz 'sudo bash -s' <<'REMOTE'
+          set -eo pipefail
+          rm -f /etc/rmz/PARKED
+          systemctl enable --now rmz
+          REMOTE
+
+      - name: Приёмка возврата
+        if: inputs.mode == 'resume'
+        env:
+          SITE: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+        run: |
+          set -eo pipefail
+          printf '%s\n' "$SITE" > site.txt
+          scp -q site.txt rmz:/tmp/rmz-site.txt
+          ssh rmz 'sudo bash -s' <<'REMOTE'
+          set -eo pipefail
+          SITE=$(tr -d '\n' < /tmp/rmz-site.txt); rm -f /tmp/rmz-site.txt
+          ACTIVE=$(systemctl show rmz -p ActiveState --value)
+          ENABLED=$(systemctl show rmz -p UnitFileState --value)
+          echo "ActiveState=$ACTIVE UnitFileState=$ENABLED"
+          [ "$ENABLED" = "enabled" ] || { echo "::error::юнит не вернулся в автозапуск"; exit 1; }
+          # Next поднимается не мгновенно — ждём до минуты, как смоук деплоя.
+          CODE=000
+          for i in $(seq 1 20); do
+            CODE=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "$SITE/" || echo 000)
+            [ "$CODE" = "200" ] && break
+            sleep 3
+          done
+          echo "внешняя петля: / -> $CODE"
+          [ "$CODE" = "200" ] || {
+            echo "::error::сайт не поднялся"; journalctl -u rmz -n 40 --no-pager -o cat || true; exit 1; }
+          [ -f /etc/rmz/PARKED ] && { echo "::error::маркер парковки остался — деплой будет краснеть"; exit 1; }
+          echo "✅ сайт снова отвечает 200, парковка снята"
+          REMOTE
